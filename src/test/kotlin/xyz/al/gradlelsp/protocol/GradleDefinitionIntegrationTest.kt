@@ -50,6 +50,12 @@ class GradleDefinitionIntegrationTest {
         )
 
         GradleLanguageServer(textDocuments = textDocuments).use { server ->
+            val experimental = server.initialize(InitializeParams()).join()
+                .capabilities.experimental as Map<*, *>
+            val gradleLsp = experimental["gradleLsp"] as Map<*, *>
+            val externalCapability = gradleLsp["externalDocument"] as Map<*, *>
+            assertEquals("gradle-lsp", externalCapability["uriScheme"])
+            assertEquals("gradle-lsp/externalDocument", externalCapability["request"])
             assertTrue(
                 ServiceEndpoints.getSupportedMethods(GradleLanguageServer::class.java)
                     .containsKey("gradle-lsp/externalDocument"),

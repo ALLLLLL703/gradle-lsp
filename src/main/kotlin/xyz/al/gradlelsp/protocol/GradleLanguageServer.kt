@@ -30,13 +30,21 @@ internal class GradleLanguageServer(
         val capabilities = ServerCapabilities()
         capabilities.setTextDocumentSync(TextDocumentSyncKind.Full)
         capabilities.setDefinitionProvider(true)
+        capabilities.experimental = mapOf(
+            "gradleLsp" to mapOf(
+                "externalDocument" to mapOf(
+                    "uriScheme" to EXTERNAL_DOCUMENT_URI_SCHEME,
+                    "request" to EXTERNAL_DOCUMENT_REQUEST,
+                ),
+            ),
+        )
 
         val result = InitializeResult(capabilities)
         result.serverInfo = ServerInfo("Gradle LSP", "0.1.0-SNAPSHOT")
         return CompletableFuture.completedFuture(result)
     }
 
-    @JsonRequest("gradle-lsp/externalDocument")
+    @JsonRequest(EXTERNAL_DOCUMENT_REQUEST)
     fun externalDocument(params: ExternalDocumentParams): CompletableFuture<ExternalDocumentContent?> =
         CompletableFuture.completedFuture(
             textDocuments.externalDocument(params.uri)?.let { document ->
@@ -60,6 +68,11 @@ internal class GradleLanguageServer(
     fun exitCode(): CompletableFuture<Int> = exitCode
 
     override fun close() = textDocuments.close()
+
+    private companion object {
+        const val EXTERNAL_DOCUMENT_URI_SCHEME = "gradle-lsp"
+        const val EXTERNAL_DOCUMENT_REQUEST = "gradle-lsp/externalDocument"
+    }
 }
 
 internal data class ExternalDocumentParams(
