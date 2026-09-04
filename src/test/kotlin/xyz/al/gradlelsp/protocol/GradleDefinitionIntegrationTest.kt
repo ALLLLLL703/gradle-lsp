@@ -256,6 +256,11 @@ class GradleDefinitionIntegrationTest {
                 val first = Box(1)
                 val recovered = Box(2)
                 val other = Box("x")
+                interface Worker { fun work() }
+                class WorkerImpl : Worker { override fun work() = Unit }
+                val worker: Worker = WorkerImpl()
+                worker.work()
+                WorkerImpl().work()
             """.trimIndent()
             Files.writeString(script, text)
             Files.writeString(overlayScript, "val stale: Int = 1\n")
@@ -311,6 +316,27 @@ class GradleDefinitionIntegrationTest {
                 assertEquals(listOf(1, 6, 7), callsAndDeclaration.map { location -> location.range.start.line })
                 assertEquals(Position(1, 4), callsAndDeclaration.first().range.start)
                 assertEquals(Position(1, 15), callsAndDeclaration.first().range.end)
+
+                val baseMemberReferences = textDocuments.references(
+                    ReferenceParams(
+                        TextDocumentIdentifier(script.toUri().toString()),
+                        Position(9, 24),
+                        ReferenceContext(false),
+                    ),
+                ).join()
+                assertEquals(listOf(Position(12, 7)), baseMemberReferences.map { location -> location.range.start })
+
+                val overrideMemberReferences = textDocuments.references(
+                    ReferenceParams(
+                        TextDocumentIdentifier(script.toUri().toString()),
+                        Position(10, 42),
+                        ReferenceContext(false),
+                    ),
+                ).join()
+                assertEquals(
+                    listOf(Position(13, 13)),
+                    overrideMemberReferences.map { location -> location.range.start },
+                )
             }
         } finally {
             project.toFile().deleteRecursively()
@@ -405,6 +431,8 @@ class GradleDefinitionIntegrationTest {
             val answer = Answer()
             val broken =
             val marker = "😀"; answer
+            typealias AnswerAlias = Answer
+            val aliased: AnswerAlias = Answer()
         """.trimIndent()
         val script = Path.of("build.gradle.kts").toAbsolutePath().normalize()
         val uri = script.toUri().toString()
@@ -434,6 +462,12 @@ class GradleDefinitionIntegrationTest {
             assertEquals(definition, declaration)
             assertEquals(Position(0, 6), typeDefinition.range.start)
             assertEquals(Position(0, 12), typeDefinition.range.end)
+
+            val expandedAliasType = textDocuments.typeDefinition(
+                TypeDefinitionParams(TextDocumentIdentifier(uri), Position(5, 14)),
+            ).join().left.single()
+            assertEquals(Position(0, 6), expandedAliasType.range.start)
+            assertEquals(Position(0, 12), expandedAliasType.range.end)
         }
     }
 
