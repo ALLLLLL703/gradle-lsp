@@ -21,6 +21,7 @@ import xyz.al.gradlelsp.documents.ExternalDocumentStore
 import xyz.al.gradlelsp.gradle.GradleKotlinDslModel
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.LinkedHashMap
 import java.util.zip.ZipFile
 
 internal class KotlinExternalSourceResolver(
@@ -28,6 +29,7 @@ internal class KotlinExternalSourceResolver(
 ) {
     private val kotlinDecompiler = KotlinDescriptorStubDecompiler(documents)
     private val javaDecompiler = JavaClassDecompiler(documents)
+    private val archiveIndexes = LinkedHashMap<ArchiveIndexKey, List<String>>(64, 0.75f, true)
     fun resolve(
         descriptor: DeclarationDescriptor,
         model: GradleKotlinDslModel,
@@ -140,14 +142,14 @@ internal class KotlinExternalSourceResolver(
         }
     }
 
-    private fun directoryUnits(root: Path, packagePath: String): List<SourceUnit> {
+    private fun directoryUnits(root: Path, packagePath: String): Sequence<SourceUnit> {
         val packageDirectory = root.resolve(packagePath)
-        if (!Files.isDirectory(packageDirectory)) return emptyList()
-        return Files.walk(packageDirectory).use { paths ->
+        if (!Files.isDirectory(packageDirectory)) return emptySequence()
+        val sourceFiles = Files.walk(packageDirectory).use { paths ->
             paths.filter { path -> Files.isRegularFile(path) && path.fileName.toString().isSourceFile() }
-                .map { path -> fileUnit(path, root) }
                 .toList()
         }
+        return sourceFiles.asSequence().map { path -> fileUnit(path, root) }
     }
 
     private fun fileUnit(path: Path, root: Path = path.parent ?: path): SourceUnit =
@@ -156,39 +158,80 @@ internal class KotlinExternalSourceResolver(
             displayName = root.relativize(path).toString().replace('\\', '/'),
             fileName = path.fileName.toString(),
             languageId = path.fileName.toString().sourceLanguageId(),
-            text = Files.readString(path),
-        )
-
-    private fun archiveUnits(archive: Path, packagePath: String): List<SourceUnit> = runCatching {
-        ZipFile(archive.toFile()).use { zip ->
-            zip.entries().asSequence()
-                .filter { entry ->
-                    !entry.isDirectory &&
-                        entry.name.isSourceFile() &&
-                        (packagePath.isEmpty() ||
-                            entry.name.startsWith("$packagePath/") ||
-                            entry.name.contains("/$packagePath/"))
-                }
-                .map { entry ->
-                    SourceUnit(
-                        origin = "${archive.toAbsolutePath().normalize()}!/${entry.name}",
-                        displayName = entry.name,
-                        fileName = entry.name.substringAfterLast('/'),
-                        languageId = entry.name.sourceLanguageId(),
-                        text = zip.getInputStream(entry).bufferedReader(Charsets.UTF_8).use { it.readText() },
-                    )
-                }
-                .toList()
+        ) {
+            Files.readString(path)
         }
-    }.getOrDefault(emptyList())
 
-    private data class SourceUnit(
+    private fun archiveUnits(archive: Path, packagePath: String): Sequence<SourceUnit> {
+        val entryNames = archiveEntryNames(archive, packagePath)
+        return entryNames.asSequence().map { entryName ->
+            SourceUnit(
+                origin = "${archive.toAbsolutePath().normalize()}!/$entryName",
+                displayName = entryName,
+                fileName = entryName.substringAfterLast('/'),
+                languageId = entryName.sourceLanguageId(),
+            ) {
+                ZipFile(archive.toFile()).use { zip ->
+                    val entry = requireNotNull(zip.getEntry(entryName))
+                    zip.getInputStream(entry).bufferedReader(Charsets.UTF_8).use { it.readText() }
+                }
+            }
+        }
+    }
+
+    @Synchronized
+    private fun archiveEntryNames(archive: Path, packagePath: String): List<String> {
+        val normalized = archive.toAbsolutePath().normalize()
+        val key = runCatching {
+            ArchiveIndexKey(
+                path = normalized,
+                packagePath = packagePath,
+                size = Files.size(normalized),
+                modifiedAt = Files.getLastModifiedTime(normalized).toMillis(),
+            )
+        }.getOrElse { return emptyList() }
+        archiveIndexes[key]?.let { return it }
+        val entries = runCatching {
+            ZipFile(normalized.toFile()).use { zip ->
+                zip.entries().asSequence()
+                    .filter { entry ->
+                        !entry.isDirectory &&
+                            entry.name.isSourceFile() &&
+                            (packagePath.isEmpty() ||
+                                entry.name.startsWith("$packagePath/") ||
+                                entry.name.contains("/$packagePath/"))
+                    }
+                    .map { entry -> entry.name }
+                    .toList()
+            }
+        }.getOrDefault(emptyList())
+        archiveIndexes[key] = entries
+        if (archiveIndexes.size > MAXIMUM_ARCHIVE_INDEXES) {
+            archiveIndexes.remove(archiveIndexes.entries.iterator().next().key)
+        }
+        return entries
+    }
+
+    private class SourceUnit(
         val origin: String,
         val displayName: String,
         val fileName: String,
         val languageId: String,
-        val text: String,
+        readText: () -> String,
+    ) {
+        val text: String by lazy(readText)
+    }
+
+    private data class ArchiveIndexKey(
+        val path: Path,
+        val packagePath: String,
+        val size: Long,
+        val modifiedAt: Long,
     )
+
+    private companion object {
+        const val MAXIMUM_ARCHIVE_INDEXES = 64
+    }
 }
 
 private fun String.isSourceFile(): Boolean = endsWith(".kt") || endsWith(".java")

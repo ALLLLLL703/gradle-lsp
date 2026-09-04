@@ -20,6 +20,7 @@ import xyz.al.gradlelsp.gradle.GradleKotlinDslModelLoader
 import xyz.al.gradlelsp.gradle.GradleKotlinDslModelProvider
 import java.net.URI
 import java.nio.file.Path
+import java.util.LinkedHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal class KotlinFileNavigationEngine(
@@ -28,7 +29,7 @@ internal class KotlinFileNavigationEngine(
     private val localParser: KotlinAstParser = KotlinAstParser(),
 ) : DocumentNavigationEngine {
     private val closed = AtomicBoolean(false)
-    private val modelParsers = mutableMapOf<ParserKey, KotlinAstParser>()
+    private val modelParsers = LinkedHashMap<ParserKey, KotlinAstParser>(8, 0.75f, true)
     private val externalSources = KotlinExternalSourceResolver(externalDocuments)
 
     override fun definitions(document: AnalysisDocument, offset: Int): List<SourceDefinition> {
@@ -127,16 +128,22 @@ internal class KotlinFileNavigationEngine(
             baseClassName = template.className,
             implicitReceiverClassName = template.implicitReceiverClassName,
         )
-        return modelParsers.getOrPut(key) {
-            KotlinAstParser(
-                KotlinScriptAnalysisContext(
-                    classPath = key.classPath,
-                    implicitImports = key.implicitImports,
-                    baseClassName = key.baseClassName,
-                    implicitReceiverClassName = key.implicitReceiverClassName,
-                ),
-            )
+        modelParsers[key]?.let { return it }
+        val parser = KotlinAstParser(
+            KotlinScriptAnalysisContext(
+                classPath = key.classPath,
+                implicitImports = key.implicitImports,
+                baseClassName = key.baseClassName,
+                implicitReceiverClassName = key.implicitReceiverClassName,
+            ),
+        )
+        modelParsers[key] = parser
+        if (modelParsers.size > MAXIMUM_MODEL_PARSERS) {
+            val eldest = modelParsers.entries.iterator().next()
+            modelParsers.remove(eldest.key)
+            eldest.value.close()
         }
+        return parser
     }
 
     private fun sourceDefinition(
@@ -168,4 +175,8 @@ internal class KotlinFileNavigationEngine(
         val baseClassName: String,
         val implicitReceiverClassName: String,
     )
+
+    private companion object {
+        const val MAXIMUM_MODEL_PARSERS = 4
+    }
 }
