@@ -27,6 +27,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -421,6 +422,47 @@ class GradleDefinitionIntegrationTest {
             continueNavigation.countDown()
 
             assertTrue(response.join().isEmpty())
+        }
+    }
+
+    @Test
+    fun `queued navigation keeps the document generation from request arrival`() {
+        val script = Path.of("build.gradle.kts").toAbsolutePath().normalize()
+        val uri = script.toUri().toString()
+        val original = "val original = 1\noriginal\n"
+        val replacement = "val replacement = 2\nreplacement\n"
+        val documents = DocumentStore().apply { open(uri, 1, original) }
+        val enteredFirstRequest = CountDownLatch(1)
+        val continueFirstRequest = CountDownLatch(1)
+        val calls = AtomicInteger()
+        val navigation = object : DocumentNavigationEngine {
+            override fun definitions(document: AnalysisDocument, offset: Int): List<SourceDefinition> {
+                if (calls.incrementAndGet() == 1) {
+                    enteredFirstRequest.countDown()
+                    check(continueFirstRequest.await(5, TimeUnit.SECONDS))
+                }
+                return listOf(SourceDefinition(uri, document.text, 4, document.text.indexOf(' ', 4)))
+            }
+        }
+        val textDocuments = GradleTextDocumentService(
+            documents = documents,
+            analyzer = noAnalysis(),
+            navigation = navigation,
+        )
+
+        textDocuments.use {
+            val first = textDocuments.definition(
+                DefinitionParams(TextDocumentIdentifier(uri), Position(1, 1)),
+            )
+            assertTrue(enteredFirstRequest.await(5, TimeUnit.SECONDS))
+            val queued = textDocuments.definition(
+                DefinitionParams(TextDocumentIdentifier(uri), Position(1, 1)),
+            )
+            documents.replace(uri, 2, replacement)
+            continueFirstRequest.countDown()
+
+            assertTrue(first.join().left.isEmpty())
+            assertTrue(queued.join().left.isEmpty())
         }
     }
 

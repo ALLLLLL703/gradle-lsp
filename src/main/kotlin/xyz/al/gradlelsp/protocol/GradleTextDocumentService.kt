@@ -107,12 +107,12 @@ internal class GradleTextDocumentService(
 
     override fun definition(
         params: DefinitionParams,
-    ): CompletableFuture<Either<List<Location>, List<LocationLink>>> =
-        CompletableFuture.supplyAsync(
+    ): CompletableFuture<Either<List<Location>, List<LocationLink>>> {
+        val snapshot = documents.current(params.textDocument.uri)
+            ?: return CompletableFuture.completedFuture(emptyDefinitions())
+        return CompletableFuture.supplyAsync(
             {
                 try {
-                    val snapshot = documents.current(params.textDocument.uri)
-                        ?: return@supplyAsync emptyDefinitions()
                     val offset = Utf16LineMap(snapshot.text).offsetAt(params.position)
                         ?: return@supplyAsync emptyDefinitions()
                     val definitions = navigation.definitions(
@@ -132,15 +132,16 @@ internal class GradleTextDocumentService(
             },
             navigationExecutor,
         )
+    }
 
     override fun declaration(
         params: DeclarationParams,
-    ): CompletableFuture<Either<List<Location>, List<LocationLink>>> =
-        CompletableFuture.supplyAsync(
+    ): CompletableFuture<Either<List<Location>, List<LocationLink>>> {
+        val snapshot = documents.current(params.textDocument.uri)
+            ?: return CompletableFuture.completedFuture(emptyDefinitions())
+        return CompletableFuture.supplyAsync(
             {
                 try {
-                    val snapshot = documents.current(params.textDocument.uri)
-                        ?: return@supplyAsync emptyDefinitions()
                     val offset = Utf16LineMap(snapshot.text).offsetAt(params.position)
                         ?: return@supplyAsync emptyDefinitions()
                     val declarations = navigation.declarations(
@@ -160,23 +161,23 @@ internal class GradleTextDocumentService(
             },
             navigationExecutor,
         )
+    }
 
     override fun implementation(
         params: ImplementationParams,
-    ): CompletableFuture<Either<List<Location>, List<LocationLink>>> =
-        CompletableFuture.supplyAsync(
+    ): CompletableFuture<Either<List<Location>, List<LocationLink>>> {
+        val capture = documents.capture(params.textDocument.uri)
+        val snapshot = capture.snapshot ?: return CompletableFuture.completedFuture(emptyDefinitions())
+        return CompletableFuture.supplyAsync(
             {
                 try {
-                    val snapshot = documents.current(params.textDocument.uri)
-                        ?: return@supplyAsync emptyDefinitions()
-                    val workspaceRevision = documents.revision()
                     val offset = Utf16LineMap(snapshot.text).offsetAt(params.position)
                         ?: return@supplyAsync emptyDefinitions()
                     val implementations = navigation.implementations(
                         AnalysisDocument(snapshot.uri, snapshot.fileName, snapshot.text),
                         offset,
                     )
-                    if (!documents.isCurrent(snapshot) || documents.revision() != workspaceRevision) {
+                    if (!documents.isCurrent(snapshot) || documents.revision() != capture.revision) {
                         return@supplyAsync emptyDefinitions()
                     }
 
@@ -191,14 +192,14 @@ internal class GradleTextDocumentService(
             },
             navigationExecutor,
         )
+    }
 
-    override fun references(params: ReferenceParams): CompletableFuture<List<Location>> =
-        CompletableFuture.supplyAsync(
+    override fun references(params: ReferenceParams): CompletableFuture<List<Location>> {
+        val capture = documents.capture(params.textDocument.uri)
+        val snapshot = capture.snapshot ?: return CompletableFuture.completedFuture(emptyList())
+        return CompletableFuture.supplyAsync(
             {
                 try {
-                    val snapshot = documents.current(params.textDocument.uri)
-                        ?: return@supplyAsync emptyList()
-                    val workspaceRevision = documents.revision()
                     val offset = Utf16LineMap(snapshot.text).offsetAt(params.position)
                         ?: return@supplyAsync emptyList()
                     val references = navigation.references(
@@ -206,7 +207,7 @@ internal class GradleTextDocumentService(
                         offset,
                         params.context.isIncludeDeclaration,
                     )
-                    if (!documents.isCurrent(snapshot) || documents.revision() != workspaceRevision) {
+                    if (!documents.isCurrent(snapshot) || documents.revision() != capture.revision) {
                         return@supplyAsync emptyList()
                     }
 
@@ -221,15 +222,16 @@ internal class GradleTextDocumentService(
             },
             navigationExecutor,
         )
+    }
 
     override fun typeDefinition(
         params: TypeDefinitionParams,
-    ): CompletableFuture<Either<List<Location>, List<LocationLink>>> =
-        CompletableFuture.supplyAsync(
+    ): CompletableFuture<Either<List<Location>, List<LocationLink>>> {
+        val snapshot = documents.current(params.textDocument.uri)
+            ?: return CompletableFuture.completedFuture(emptyDefinitions())
+        return CompletableFuture.supplyAsync(
             {
                 try {
-                    val snapshot = documents.current(params.textDocument.uri)
-                        ?: return@supplyAsync emptyDefinitions()
                     val offset = Utf16LineMap(snapshot.text).offsetAt(params.position)
                         ?: return@supplyAsync emptyDefinitions()
                     val definitions = navigation.typeDefinitions(
@@ -249,15 +251,16 @@ internal class GradleTextDocumentService(
             },
             navigationExecutor,
         )
+    }
 
     override fun documentSymbol(
         params: DocumentSymbolParams,
-    ): CompletableFuture<List<Either<SymbolInformation, DocumentSymbol>>> =
-        CompletableFuture.supplyAsync(
+    ): CompletableFuture<List<Either<SymbolInformation, DocumentSymbol>>> {
+        val snapshot = documents.current(params.textDocument.uri)
+            ?: return CompletableFuture.completedFuture(emptyList())
+        return CompletableFuture.supplyAsync(
             {
                 try {
-                    val snapshot = documents.current(params.textDocument.uri)
-                        ?: return@supplyAsync emptyList()
                     val symbols = symbolEngine.symbols(
                         AnalysisDocument(snapshot.uri, snapshot.fileName, snapshot.text),
                     )
@@ -287,6 +290,7 @@ internal class GradleTextDocumentService(
             },
             symbolExecutor,
         )
+    }
 
     private fun schedule(snapshot: DocumentSnapshot) {
         analysisExecutor.execute {

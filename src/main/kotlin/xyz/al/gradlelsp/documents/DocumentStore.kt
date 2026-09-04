@@ -2,45 +2,54 @@ package xyz.al.gradlelsp.documents
 
 import java.net.URI
 import java.nio.file.Path
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicLong
+
+internal data class DocumentStoreCapture(
+    val snapshot: DocumentSnapshot?,
+    val revision: Long,
+)
 
 internal class DocumentStore {
-    private val snapshots = ConcurrentHashMap<String, DocumentSnapshot>()
-    private val revision = AtomicLong()
+    private val snapshots = mutableMapOf<String, DocumentSnapshot>()
+    private var workspaceRevision = 0L
 
+    @Synchronized
     fun open(uri: String, version: Int, text: String): DocumentSnapshot {
         val snapshot = DocumentSnapshot(uri, fileName(uri), version, text)
         snapshots[uri] = snapshot
-        revision.incrementAndGet()
+        workspaceRevision += 1
         return snapshot
     }
 
+    @Synchronized
     fun replace(uri: String, version: Int, text: String): DocumentSnapshot? {
-        var accepted: DocumentSnapshot? = null
-        snapshots.computeIfPresent(uri) { _, current ->
-            if (version <= current.version) {
-                current
-            } else {
-                DocumentSnapshot(uri, current.fileName, version, text).also {
-                    accepted = it
-                    revision.incrementAndGet()
-                }
-            }
+        val current = snapshots[uri] ?: return null
+        if (version <= current.version) return null
+
+        return DocumentSnapshot(uri, current.fileName, version, text).also { replacement ->
+            snapshots[uri] = replacement
+            workspaceRevision += 1
         }
-        return accepted
     }
 
+    @Synchronized
     fun close(uri: String): DocumentSnapshot? = snapshots.remove(uri)?.also {
-        revision.incrementAndGet()
+        workspaceRevision += 1
     }
 
+    @Synchronized
     fun current(uri: String): DocumentSnapshot? = snapshots[uri]
 
+    @Synchronized
+    fun capture(uri: String): DocumentStoreCapture =
+        DocumentStoreCapture(snapshots[uri], workspaceRevision)
+
+    @Synchronized
     fun currentSnapshots(): List<DocumentSnapshot> = snapshots.values.toList()
 
-    fun revision(): Long = revision.get()
+    @Synchronized
+    fun revision(): Long = workspaceRevision
 
+    @Synchronized
     fun isCurrent(snapshot: DocumentSnapshot): Boolean = snapshots[snapshot.uri] === snapshot
 
     private fun fileName(uri: String): String =
