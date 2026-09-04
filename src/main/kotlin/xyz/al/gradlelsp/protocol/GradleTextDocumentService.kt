@@ -5,9 +5,13 @@ import org.eclipse.lsp4j.DefinitionParams
 import org.eclipse.lsp4j.DidCloseTextDocumentParams
 import org.eclipse.lsp4j.DidOpenTextDocumentParams
 import org.eclipse.lsp4j.DidSaveTextDocumentParams
+import org.eclipse.lsp4j.DocumentSymbol
+import org.eclipse.lsp4j.DocumentSymbolParams
 import org.eclipse.lsp4j.Location
 import org.eclipse.lsp4j.LocationLink
 import org.eclipse.lsp4j.PublishDiagnosticsParams
+import org.eclipse.lsp4j.SymbolInformation
+import org.eclipse.lsp4j.SymbolKind
 import org.eclipse.lsp4j.jsonrpc.messages.Either
 import org.eclipse.lsp4j.services.LanguageClient
 import org.eclipse.lsp4j.services.TextDocumentService
@@ -21,8 +25,11 @@ import xyz.al.gradlelsp.documents.ExternalDocumentStore
 import xyz.al.gradlelsp.navigation.DocumentNavigationEngine
 import xyz.al.gradlelsp.navigation.defaultGradleNavigationEngine
 import xyz.al.gradlelsp.presentation.LspDefinitionMapper
+import xyz.al.gradlelsp.presentation.LspDocumentSymbolMapper
 import xyz.al.gradlelsp.presentation.LspDiagnosticMapper
 import xyz.al.gradlelsp.presentation.Utf16LineMap
+import xyz.al.gradlelsp.symbols.DocumentSymbolEngine
+import xyz.al.gradlelsp.symbols.defaultGradleDocumentSymbolEngine
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -33,15 +40,32 @@ internal class GradleTextDocumentService(
     private val externalDocuments: ExternalDocumentStore = ExternalDocumentStore(),
     private val analyzer: DocumentAnalyzer = defaultGradleAnalysisEngine(),
     private val navigation: DocumentNavigationEngine = defaultGradleNavigationEngine(externalDocuments),
+    private val symbolEngine: DocumentSymbolEngine = defaultGradleDocumentSymbolEngine(),
     private val logger: ServerLogger = ServerLogger.standardError(),
     private val analysisExecutor: ExecutorService = newAnalysisExecutor(),
     private val navigationExecutor: ExecutorService = newNavigationExecutor(),
+    private val symbolExecutor: ExecutorService = newSymbolExecutor(),
 ) : TextDocumentService, AutoCloseable {
     @Volatile
     private var client: LanguageClient? = null
 
+    @Volatile
+    private var hierarchicalDocumentSymbols = false
+
+    @Volatile
+    private var supportedDocumentSymbolKinds = LspDocumentSymbolMapper.legacyKinds
+
     fun connect(client: LanguageClient) {
         this.client = client
+    }
+
+    fun configureDocumentSymbols(
+        hierarchical: Boolean,
+        supportedKinds: List<SymbolKind>?,
+    ) {
+        hierarchicalDocumentSymbols = hierarchical
+        supportedDocumentSymbolKinds = supportedKinds?.toSet()
+            ?: LspDocumentSymbolMapper.legacyKinds
     }
 
     override fun didOpen(params: DidOpenTextDocumentParams) {
@@ -96,6 +120,44 @@ internal class GradleTextDocumentService(
             navigationExecutor,
         )
 
+    override fun documentSymbol(
+        params: DocumentSymbolParams,
+    ): CompletableFuture<List<Either<SymbolInformation, DocumentSymbol>>> =
+        CompletableFuture.supplyAsync(
+            {
+                try {
+                    val snapshot = documents.current(params.textDocument.uri)
+                        ?: return@supplyAsync emptyList()
+                    val symbols = symbolEngine.symbols(
+                        AnalysisDocument(snapshot.uri, snapshot.fileName, snapshot.text),
+                    )
+                    if (!documents.isCurrent(snapshot)) return@supplyAsync emptyList()
+
+                    if (hierarchicalDocumentSymbols) {
+                        LspDocumentSymbolMapper.hierarchical(
+                            snapshot.text,
+                            symbols,
+                            supportedDocumentSymbolKinds,
+                        )
+                    } else {
+                        LspDocumentSymbolMapper.flat(
+                            snapshot.uri,
+                            snapshot.text,
+                            symbols,
+                            supportedDocumentSymbolKinds,
+                        )
+                    }
+                } catch (failure: Exception) {
+                    logger.log(
+                        "gradle-lsp: document symbols failed for ${params.textDocument.uri}: " +
+                            (failure.message ?: failure::class.java.simpleName),
+                    )
+                    emptyList()
+                }
+            },
+            symbolExecutor,
+        )
+
     private fun schedule(snapshot: DocumentSnapshot) {
         analysisExecutor.execute {
             try {
@@ -123,8 +185,10 @@ internal class GradleTextDocumentService(
     override fun close() {
         shutdown(analysisExecutor)
         shutdown(navigationExecutor)
+        shutdown(symbolExecutor)
         analyzer.close()
         navigation.close()
+        symbolEngine.close()
     }
 
     private fun shutdown(executor: ExecutorService) {
@@ -141,6 +205,8 @@ internal class GradleTextDocumentService(
         fun newAnalysisExecutor(): ExecutorService = newExecutor("gradle-lsp-analysis")
 
         fun newNavigationExecutor(): ExecutorService = newExecutor("gradle-lsp-navigation")
+
+        fun newSymbolExecutor(): ExecutorService = newExecutor("gradle-lsp-symbols")
 
         fun newExecutor(threadName: String): ExecutorService =
             Executors.newSingleThreadExecutor { task ->

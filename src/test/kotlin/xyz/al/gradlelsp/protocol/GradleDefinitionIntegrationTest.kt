@@ -1,8 +1,13 @@
 package xyz.al.gradlelsp.protocol
 
+import org.eclipse.lsp4j.ClientCapabilities
 import org.eclipse.lsp4j.DefinitionParams
+import org.eclipse.lsp4j.DocumentSymbolCapabilities
+import org.eclipse.lsp4j.DocumentSymbolParams
 import org.eclipse.lsp4j.InitializeParams
 import org.eclipse.lsp4j.Position
+import org.eclipse.lsp4j.SymbolKind
+import org.eclipse.lsp4j.TextDocumentClientCapabilities
 import org.eclipse.lsp4j.TextDocumentIdentifier
 import org.eclipse.lsp4j.jsonrpc.services.ServiceEndpoints
 import xyz.al.gradlelsp.analysis.AnalysisDocument
@@ -73,6 +78,75 @@ class GradleDefinitionIntegrationTest {
     }
 
     @Test
+    fun `document symbols preserve recovered PSI hierarchy and negotiate kinds`() {
+        val text = """
+            val emoji = "😀"; val after = 1
+            object Registry
+            enum class Mode { FAST }
+            class Box(val value: Int) {
+                fun doubled(): Int {
+                    val local = value * 2
+                    return local
+                }
+                constructor() : this(0)
+            }
+            val broken =
+            fun recovered() = 42
+            plugins { id("java") }
+        """.trimIndent()
+        val script = Path.of("build.gradle.kts").toAbsolutePath().normalize()
+        val uri = script.toUri().toString()
+        val documents = DocumentStore().apply { open(uri, 1, text) }
+        val textDocuments = GradleTextDocumentService(documents = documents, analyzer = noAnalysis())
+        val initialize = InitializeParams().apply {
+            capabilities = ClientCapabilities().apply {
+                textDocument = TextDocumentClientCapabilities().apply {
+                    documentSymbol = DocumentSymbolCapabilities().apply {
+                        hierarchicalDocumentSymbolSupport = true
+                    }
+                }
+            }
+        }
+
+        GradleLanguageServer(textDocuments = textDocuments).use { server ->
+            val capabilities = server.initialize(initialize).join().capabilities
+            assertTrue(capabilities.documentSymbolProvider.left)
+
+            val response = textDocuments.documentSymbol(
+                DocumentSymbolParams(TextDocumentIdentifier(uri)),
+            ).join()
+            assertTrue(response.all { it.isRight })
+            val symbols = response.map { it.right }
+            assertEquals(
+                listOf("emoji", "after", "Registry", "Mode", "Box", "broken", "recovered"),
+                symbols.map { it.name },
+            )
+            assertEquals(Position(0, text.indexOf("after")), symbols[1].selectionRange.start)
+            assertEquals(SymbolKind.Class, symbols.single { it.name == "Registry" }.kind)
+            assertEquals(SymbolKind.Constant, symbols.single { it.name == "Mode" }.children.single().kind)
+
+            val box = symbols.single { it.name == "Box" }
+            assertEquals(listOf("value", "doubled", "constructor"), box.children.map { it.name })
+            assertTrue(box.range.start.isAtOrBefore(box.selectionRange.start))
+            assertTrue(box.selectionRange.end.isAtOrBefore(box.range.end))
+            assertTrue(symbols.none { it.name == "plugins" || it.name == "local" })
+
+            textDocuments.configureDocumentSymbols(
+                hierarchical = false,
+                supportedKinds = SymbolKind.entries,
+            )
+            val flat = textDocuments.documentSymbol(
+                DocumentSymbolParams(TextDocumentIdentifier(uri)),
+            ).join()
+            assertTrue(flat.all { it.isLeft })
+            assertEquals("Box", flat.map { it.left }.single { it.name == "doubled" }.containerName)
+            assertEquals(SymbolKind.Object, flat.map { it.left }.single { it.name == "Registry" }.kind)
+            assertEquals(SymbolKind.EnumMember, flat.map { it.left }.single { it.name == "FAST" }.kind)
+            assertTrue(flat.map { it.left }.none { it.name == "local" })
+        }
+    }
+
+    @Test
     fun `definition resolves a recovered local symbol from an LSP UTF-16 position`() {
         val text = """
             val answer = 42
@@ -98,6 +172,9 @@ class GradleDefinitionIntegrationTest {
             assertEquals(Position(0, 10), location.range.end)
         }
     }
+
+    private fun Position.isAtOrBefore(other: Position): Boolean =
+        line < other.line || line == other.line && character <= other.character
 
     private fun noAnalysis(): DocumentAnalyzer = object : DocumentAnalyzer {
         override fun analyze(document: AnalysisDocument): List<SourceDiagnostic> = emptyList()

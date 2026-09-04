@@ -30,6 +30,7 @@ internal class GradleLanguageServer(
         val capabilities = ServerCapabilities()
         capabilities.setTextDocumentSync(TextDocumentSyncKind.Full)
         capabilities.setDefinitionProvider(true)
+        capabilities.setDocumentSymbolProvider(true)
         capabilities.experimental = mapOf(
             "gradleLsp" to mapOf(
                 "externalDocument" to mapOf(
@@ -37,6 +38,11 @@ internal class GradleLanguageServer(
                     "request" to EXTERNAL_DOCUMENT_REQUEST,
                 ),
             ),
+        )
+        val documentSymbols = params.capabilities?.textDocument?.documentSymbol
+        textDocuments.configureDocumentSymbols(
+            hierarchical = documentSymbols?.hierarchicalDocumentSymbolSupport == true,
+            supportedKinds = documentSymbols?.symbolKind?.valueSet,
         )
 
         val result = InitializeResult(capabilities)
