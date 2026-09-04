@@ -26,7 +26,7 @@ internal fun interface GradleKotlinDslModelProvider {
 }
 
 internal class GradleKotlinDslModelLoader(
-    private val maximumEntries: Int = 16,
+    private val maximumEntries: Int = 8,
     private val modelFetcher: ((script: Path, projectRoot: Path) -> GradleKotlinDslModel)? = null,
 ) : GradleKotlinDslModelProvider {
     private val models = LinkedHashMap<Path, CachedGradleModel>(16, 0.75f, true)

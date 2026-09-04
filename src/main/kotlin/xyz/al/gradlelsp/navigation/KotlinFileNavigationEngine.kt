@@ -781,6 +781,6 @@ internal class KotlinFileNavigationEngine(
     )
 
     private companion object {
-        const val MAXIMUM_MODEL_PARSERS = 4
+        const val MAXIMUM_MODEL_PARSERS = 1
     }
 }

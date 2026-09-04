@@ -243,13 +243,13 @@ internal class KotlinExternalSourceResolver(
         }
 
         companion object {
-            const val MAXIMUM_PACKAGE_INDEXES = 64
+            const val MAXIMUM_PACKAGE_INDEXES = 16
             val EMPTY = SourceArchiveIndex(emptyList())
         }
     }
 
     private companion object {
-        const val MAXIMUM_ARCHIVE_INDEXES = 64
+        const val MAXIMUM_ARCHIVE_INDEXES = 16
     }
 }
 

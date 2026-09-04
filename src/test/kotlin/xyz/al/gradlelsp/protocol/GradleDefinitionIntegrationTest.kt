@@ -87,6 +87,19 @@ class GradleDefinitionIntegrationTest {
     }
 
     @Test
+    fun `external documents are evicted by retained text budget`() {
+        val externalDocuments = ExternalDocumentStore(
+            maximumEntries = 10,
+            maximumEstimatedTextBytes = 8,
+        )
+        val first = externalDocuments.register("one", "One.kt", "kotlin", "1234")
+        val second = externalDocuments.register("two", "Two.kt", "kotlin", "5678")
+
+        assertEquals(null, externalDocuments.find(first.uri))
+        assertEquals(second, externalDocuments.find(second.uri))
+    }
+
+    @Test
     fun `document symbols preserve recovered PSI hierarchy and negotiate kinds`() {
         val text = """
             val emoji = "😀"; val after = 1

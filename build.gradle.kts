@@ -45,6 +45,16 @@ kotlin {
 
 application {
     mainClass = "xyz.al.gradlelsp.MainKt"
+    applicationDefaultJvmArgs = listOf(
+        "-Xms64m",
+        "-Xmx512m",
+        "-Xss512k",
+        "-XX:+UseSerialGC",
+        "-XX:MaxMetaspaceSize=256m",
+        "-XX:CompressedClassSpaceSize=64m",
+        "-XX:MaxDirectMemorySize=64m",
+        "-XX:ReservedCodeCacheSize=64m",
+    )
 }
 
 tasks.test {

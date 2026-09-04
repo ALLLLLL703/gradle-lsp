@@ -14,7 +14,7 @@ internal class StdioLanguageServer {
     fun run(input: InputStream, output: OutputStream, error: PrintStream): Int {
         val server = GradleLanguageServer(logger = ServerLogger(error::println))
         val threadNumber = AtomicInteger()
-        val executor = Executors.newCachedThreadPool { task ->
+        val executor = Executors.newFixedThreadPool(MAXIMUM_JSON_RPC_THREADS) { task ->
             Thread(task, "gradle-lsp-jsonrpc-${threadNumber.incrementAndGet()}").apply {
                 isDaemon = true
             }
@@ -45,5 +45,9 @@ internal class StdioLanguageServer {
             server.close()
             error.println("gradle-lsp: stdio language server stopped")
         }
+    }
+
+    private companion object {
+        const val MAXIMUM_JSON_RPC_THREADS = 4
     }
 }
