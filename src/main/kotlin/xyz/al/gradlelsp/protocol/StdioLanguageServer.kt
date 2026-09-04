@@ -12,7 +12,7 @@ import java.util.function.Function
 
 internal class StdioLanguageServer {
     fun run(input: InputStream, output: OutputStream, error: PrintStream): Int {
-        val server = GradleLanguageServer()
+        val server = GradleLanguageServer(logger = ServerLogger(error::println))
         val threadNumber = AtomicInteger()
         val executor = Executors.newCachedThreadPool { task ->
             Thread(task, "gradle-lsp-jsonrpc-${threadNumber.incrementAndGet()}").apply {
@@ -42,6 +42,7 @@ internal class StdioLanguageServer {
             1
         } finally {
             executor.shutdownNow()
+            server.close()
             error.println("gradle-lsp: stdio language server stopped")
         }
     }

@@ -14,17 +14,15 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal class GradleLanguageServer(
-    private val textDocuments: TextDocumentService = GradleTextDocumentService(),
+    logger: ServerLogger = ServerLogger.standardError(),
+    private val textDocuments: GradleTextDocumentService = GradleTextDocumentService(logger = logger),
     private val workspace: WorkspaceService = GradleWorkspaceService(),
-) : LanguageServer, LanguageClientAware {
+) : LanguageServer, LanguageClientAware, AutoCloseable {
     private val shutdownRequested = AtomicBoolean(false)
     private val exitCode = CompletableFuture<Int>()
 
-    @Volatile
-    private var client: LanguageClient? = null
-
     override fun connect(client: LanguageClient) {
-        this.client = client
+        textDocuments.connect(client)
     }
 
     override fun initialize(params: InitializeParams): CompletableFuture<InitializeResult> {
@@ -50,4 +48,6 @@ internal class GradleLanguageServer(
     override fun getWorkspaceService(): WorkspaceService = workspace
 
     fun exitCode(): CompletableFuture<Int> = exitCode
+
+    override fun close() = textDocuments.close()
 }
