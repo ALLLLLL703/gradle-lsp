@@ -22,6 +22,7 @@ import xyz.al.gradlelsp.gradle.GradleKotlinDslModel
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.LinkedHashMap
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipFile
 
 internal class KotlinExternalSourceResolver(
@@ -29,7 +30,7 @@ internal class KotlinExternalSourceResolver(
 ) {
     private val kotlinDecompiler = KotlinDescriptorStubDecompiler(documents)
     private val javaDecompiler = JavaClassDecompiler(documents)
-    private val archiveIndexes = LinkedHashMap<ArchiveIndexKey, List<String>>(64, 0.75f, true)
+    private val archiveIndexes = LinkedHashMap<ArchiveIndexKey, SourceArchiveIndex>(64, 0.75f, true)
     fun resolve(
         descriptor: DeclarationDescriptor,
         model: GradleKotlinDslModel,
@@ -163,7 +164,7 @@ internal class KotlinExternalSourceResolver(
         }
 
     private fun archiveUnits(archive: Path, packagePath: String): Sequence<SourceUnit> {
-        val entryNames = archiveEntryNames(archive, packagePath)
+        val entryNames = archiveIndex(archive).entriesFor(packagePath)
         return entryNames.asSequence().map { entryName ->
             SourceUnit(
                 origin = "${archive.toAbsolutePath().normalize()}!/$entryName",
@@ -180,36 +181,31 @@ internal class KotlinExternalSourceResolver(
     }
 
     @Synchronized
-    private fun archiveEntryNames(archive: Path, packagePath: String): List<String> {
+    private fun archiveIndex(archive: Path): SourceArchiveIndex {
         val normalized = archive.toAbsolutePath().normalize()
         val key = runCatching {
             ArchiveIndexKey(
                 path = normalized,
-                packagePath = packagePath,
                 size = Files.size(normalized),
-                modifiedAt = Files.getLastModifiedTime(normalized).toMillis(),
+                modifiedAt = Files.getLastModifiedTime(normalized).to(TimeUnit.NANOSECONDS),
             )
-        }.getOrElse { return emptyList() }
+        }.getOrElse { return SourceArchiveIndex.EMPTY }
         archiveIndexes[key]?.let { return it }
-        val entries = runCatching {
+        val entryNames = runCatching {
             ZipFile(normalized.toFile()).use { zip ->
                 zip.entries().asSequence()
-                    .filter { entry ->
-                        !entry.isDirectory &&
-                            entry.name.isSourceFile() &&
-                            (packagePath.isEmpty() ||
-                                entry.name.startsWith("$packagePath/") ||
-                                entry.name.contains("/$packagePath/"))
-                    }
+                    .filter { entry -> !entry.isDirectory && entry.name.isSourceFile() }
                     .map { entry -> entry.name }
                     .toList()
             }
         }.getOrDefault(emptyList())
-        archiveIndexes[key] = entries
+        val index = SourceArchiveIndex(entryNames)
+        archiveIndexes.keys.removeIf { cached -> cached.path == normalized && cached != key }
+        archiveIndexes[key] = index
         if (archiveIndexes.size > MAXIMUM_ARCHIVE_INDEXES) {
             archiveIndexes.remove(archiveIndexes.entries.iterator().next().key)
         }
-        return entries
+        return index
     }
 
     private class SourceUnit(
@@ -224,10 +220,33 @@ internal class KotlinExternalSourceResolver(
 
     private data class ArchiveIndexKey(
         val path: Path,
-        val packagePath: String,
         val size: Long,
         val modifiedAt: Long,
     )
+
+    private class SourceArchiveIndex(entryNames: List<String>) {
+        private val allEntries = entryNames.toList()
+        private val packageEntries = LinkedHashMap<String, List<String>>(16, 0.75f, true)
+
+        @Synchronized
+        fun entriesFor(packagePath: String): List<String> {
+            if (packagePath.isEmpty()) return allEntries
+            packageEntries[packagePath]?.let { return it }
+            val entries = allEntries.filter { entryName ->
+                entryName.startsWith("$packagePath/") || entryName.contains("/$packagePath/")
+            }
+            packageEntries[packagePath] = entries
+            if (packageEntries.size > MAXIMUM_PACKAGE_INDEXES) {
+                packageEntries.remove(packageEntries.entries.iterator().next().key)
+            }
+            return entries
+        }
+
+        companion object {
+            const val MAXIMUM_PACKAGE_INDEXES = 64
+            val EMPTY = SourceArchiveIndex(emptyList())
+        }
+    }
 
     private companion object {
         const val MAXIMUM_ARCHIVE_INDEXES = 64
