@@ -274,6 +274,13 @@ class GradleDefinitionIntegrationTest {
                 class Meter(val amount: Int) { operator fun plus(other: Meter) = Meter(amount + other.amount) }
                 val left = Meter(1)
                 val total = left + Meter(2)
+                class Shelf {
+                    operator fun get(index: Int) = index
+                    operator fun set(index: Int, value: Int) = Unit
+                }
+                val shelf = Shelf()
+                val read = shelf[0]
+                shelf[1] = 2
             """.trimIndent()
             Files.writeString(script, text)
             Files.writeString(overlayScript, "val stale: Int = 1\n")
@@ -378,6 +385,36 @@ class GradleDefinitionIntegrationTest {
                     ),
                 ).join()
                 assertEquals(listOf(plusOperator), operatorReferences.map { location -> location.range.start })
+
+                val getDeclaration = Position(21, text.lines()[21].indexOf("get") + 1)
+                val setDeclaration = Position(22, text.lines()[22].indexOf("set") + 1)
+                val readBracket = Position(25, text.lines()[25].indexOf("["))
+                val writeBracket = Position(26, text.lines()[26].indexOf("["))
+                val getDefinition = textDocuments.definition(
+                    DefinitionParams(TextDocumentIdentifier(script.toUri().toString()), readBracket),
+                ).join().left.single()
+                val setDefinition = textDocuments.definition(
+                    DefinitionParams(TextDocumentIdentifier(script.toUri().toString()), writeBracket),
+                ).join().left.single()
+                assertEquals(Position(21, text.lines()[21].indexOf("get")), getDefinition.range.start)
+                assertEquals(Position(22, text.lines()[22].indexOf("set")), setDefinition.range.start)
+
+                val getReferences = textDocuments.references(
+                    ReferenceParams(
+                        TextDocumentIdentifier(script.toUri().toString()),
+                        getDeclaration,
+                        ReferenceContext(false),
+                    ),
+                ).join()
+                val setReferences = textDocuments.references(
+                    ReferenceParams(
+                        TextDocumentIdentifier(script.toUri().toString()),
+                        setDeclaration,
+                        ReferenceContext(false),
+                    ),
+                ).join()
+                assertEquals(listOf(readBracket), getReferences.map { location -> location.range.start })
+                assertEquals(listOf(writeBracket), setReferences.map { location -> location.range.start })
             }
         } finally {
             project.toFile().deleteRecursively()

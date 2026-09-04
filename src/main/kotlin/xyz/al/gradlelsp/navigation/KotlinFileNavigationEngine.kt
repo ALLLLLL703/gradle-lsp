@@ -16,6 +16,7 @@ import org.jetbrains.kotlin.descriptors.ReceiverParameterDescriptor
 import org.jetbrains.kotlin.descriptors.TypeAliasDescriptor
 import org.jetbrains.kotlin.descriptors.TypeParameterDescriptor
 import org.jetbrains.kotlin.descriptors.VariableDescriptor
+import org.jetbrains.kotlin.psi.KtArrayAccessExpression
 import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtDeclaration
 import org.jetbrains.kotlin.psi.KtExpression
@@ -76,8 +77,7 @@ internal class KotlinFileNavigationEngine(
         val model = modelProvider.modelFor(script)
         val parser = parserFor(document.fileName, model)
         val parsedFile = parser.parse(document.fileName, document.text)
-        val reference = referenceAt(parsedFile, offset) ?: return emptyList()
-        val descriptors = resolveDescriptors(parser, parsedFile, reference)
+        val descriptors = resolveDescriptorsAt(parser, parsedFile, offset)
         return descriptors.flatMap { descriptor ->
             val sourceDeclaration = DescriptorToSourceUtils.descriptorToDeclaration(descriptor)
             if (sourceDeclaration?.containingFile === parsedFile.psi) {
@@ -124,11 +124,8 @@ internal class KotlinFileNavigationEngine(
             workspaceDocuments.forEachDocument(document) { candidateDocument ->
                 try {
                     analyzeWorkspaceDocument(candidateDocument, analysis.usesGradleModel) { parsedFile, context ->
-                        PsiTreeUtil.collectElementsOfType(
-                            parsedFile.psi,
-                            KtSimpleNameExpression::class.java,
-                        ).forEach { reference ->
-                            val matches = referenceDescriptors(context, reference)
+                        referenceOccurrences(parsedFile, context).forEach { reference ->
+                            val matches = reference.descriptors
                                 .flatMap { descriptor ->
                                     buildList {
                                         add(semanticTarget(descriptor, parsedFile, candidateDocument))
@@ -147,12 +144,11 @@ internal class KotlinFileNavigationEngine(
                                     analysis.targets.any { target -> sameTarget(target, candidate) }
                                 }
                             if (matches) {
-                                val range = reference.textRange
                                 references += SourceDefinition(
                                     candidateDocument.uri,
                                     candidateDocument.text,
-                                    range.startOffset,
-                                    range.endOffset,
+                                    reference.range.startOffset,
+                                    reference.range.endOffset,
                                 )
                             }
                         }
@@ -393,6 +389,9 @@ internal class KotlinFileNavigationEngine(
         semanticDeclarationAt(file, offset)?.let { declaration ->
             return listOfNotNull(declarationDescriptor(context, declaration))
         }
+        arrayAccessAt(file, offset)?.let { reference ->
+            return arrayAccessDescriptors(context, reference)
+        }
         val reference = referenceAt(file, offset) ?: return emptyList()
         return referenceDescriptors(context, reference)
     }
@@ -561,19 +560,24 @@ internal class KotlinFileNavigationEngine(
         file: ParsedKotlinFile,
         offset: Int,
     ): PsiElement? = runCatching {
-        val reference = referenceAt(file, offset) ?: return@runCatching null
-        resolveDescriptors(localParser, file, reference)
+        resolveDescriptorsAt(localParser, file, offset)
             .singleOrNull()
             ?.let(DescriptorToSourceUtils::descriptorToDeclaration)
             ?.takeIf { declaration -> declaration.containingFile === file.psi }
     }.getOrNull()
 
-    private fun resolveDescriptors(
+    private fun resolveDescriptorsAt(
         parser: KotlinAstParser,
         file: ParsedKotlinFile,
-        reference: KtSimpleNameExpression,
-    ): List<DeclarationDescriptor> =
-        referenceDescriptors(parser.bindingContext(file), reference)
+        offset: Int,
+    ): List<DeclarationDescriptor> {
+        val context = parser.bindingContext(file)
+        arrayAccessAt(file, offset)?.let { reference ->
+            return arrayAccessDescriptors(context, reference)
+        }
+        val reference = referenceAt(file, offset) ?: return emptyList()
+        return referenceDescriptors(context, reference)
+    }
 
     private fun referenceDescriptors(
         context: BindingContext,
@@ -584,10 +588,50 @@ internal class KotlinFileNavigationEngine(
         val referenced = constructor?.let(::listOf)
             ?: direct?.let(::listOf)
             ?: context[BindingContext.AMBIGUOUS_REFERENCE_TARGET, reference].orEmpty()
-        return referenced
-            .flatMap(DescriptorToSourceUtils::getEffectiveReferencedDescriptors)
-            .distinctBy { descriptor -> descriptor.original }
+        return effectiveDescriptors(referenced)
     }
+
+    private fun arrayAccessDescriptors(
+        context: BindingContext,
+        reference: KtArrayAccessExpression,
+    ): List<DeclarationDescriptor> =
+        effectiveDescriptors(
+            listOfNotNull(
+                reference.getResolvedCall(context)?.resultingDescriptor,
+                context[BindingContext.INDEXED_LVALUE_GET, reference]?.resultingDescriptor,
+                context[BindingContext.INDEXED_LVALUE_SET, reference]?.resultingDescriptor,
+            ),
+        )
+
+    private fun effectiveDescriptors(descriptors: Collection<DeclarationDescriptor>): List<DeclarationDescriptor> =
+        descriptors.flatMap(DescriptorToSourceUtils::getEffectiveReferencedDescriptors)
+            .distinctBy { descriptor -> descriptor.original }
+
+    private fun referenceOccurrences(
+        file: ParsedKotlinFile,
+        context: BindingContext,
+    ): Sequence<ReferenceOccurrence> = sequence {
+        PsiTreeUtil.collectElementsOfType(file.psi, KtSimpleNameExpression::class.java)
+            .forEach { reference ->
+                yield(ReferenceOccurrence(reference.textRange, referenceDescriptors(context, reference)))
+            }
+        PsiTreeUtil.collectElementsOfType(file.psi, KtArrayAccessExpression::class.java)
+            .forEach { reference ->
+                val range = reference.leftBracket?.textRange ?: return@forEach
+                yield(ReferenceOccurrence(range, arrayAccessDescriptors(context, reference)))
+            }
+    }
+
+    private fun arrayAccessAt(file: ParsedKotlinFile, offset: Int): KtArrayAccessExpression? =
+        elementsAround(file, offset)
+            .mapNotNull { element ->
+                PsiTreeUtil.getParentOfType(element, KtArrayAccessExpression::class.java, false)
+            }
+            .filter { reference ->
+                listOfNotNull(reference.leftBracket, reference.rightBracket)
+                    .any { bracket -> offset in bracket.textRange.startOffset..bracket.textRange.endOffset }
+            }
+            .minByOrNull { reference -> reference.textRange.length }
 
     private fun referenceAt(file: ParsedKotlinFile, offset: Int): KtSimpleNameExpression? =
         elementsAround(file, offset)
@@ -747,6 +791,11 @@ internal class KotlinFileNavigationEngine(
             }
         }
     }
+
+    private data class ReferenceOccurrence(
+        val range: TextRange,
+        val descriptors: List<DeclarationDescriptor>,
+    )
 
     private data class TargetAnalysis(
         val usesGradleModel: Boolean,
