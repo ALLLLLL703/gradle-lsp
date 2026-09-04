@@ -3,6 +3,7 @@ package xyz.al.gradlelsp.analysis
 import org.jetbrains.kotlin.com.intellij.psi.util.PsiTreeUtil
 import org.jetbrains.kotlin.psi.KtNamedFunction
 import org.jetbrains.kotlin.psi.KtProperty
+import xyz.al.gradlelsp.documents.WorkspaceDocumentSource
 import xyz.al.gradlelsp.gradle.GradleKotlinDslModelLoader
 import xyz.al.gradlelsp.navigation.KotlinFileNavigationEngine
 import xyz.al.gradlelsp.navigation.SourceDefinition
@@ -241,6 +242,39 @@ class KotlinAstParserTest {
                 definition.sourceText.substring(definition.startOffset, definition.endOffset),
             )
             assertTrue(definition.sourceText.contains("public String toJson(Object src)"))
+        }
+    }
+
+    @Test
+    fun `references include a resolved external Gradle declaration`() {
+        val script = Path.of("build.gradle.kts").toAbsolutePath().normalize()
+        val model = GradleKotlinDslModelLoader().modelFor(script).copy(sourcePath = emptyList())
+        val text = """
+            val broken =
+            repositories {
+                mavenCentral()
+            }
+        """.trimIndent()
+        val document = AnalysisDocument(script.toUri().toString(), script.fileName.toString(), text)
+        val workspace = WorkspaceDocumentSource { origin, consume -> consume(origin) }
+
+        KotlinFileNavigationEngine(
+            modelProvider = { model },
+            workspaceDocuments = workspace,
+        ).use { navigation ->
+            val reference = text.indexOf("mavenCentral")
+            val locations = navigation.references(document, reference, includeDeclaration = true)
+            val workspaceReference = locations.single { location -> location.uri == document.uri }
+            val externalDeclaration = locations.single { location -> location.uri.startsWith("gradle-lsp://") }
+
+            assertEquals(reference, workspaceReference.startOffset)
+            assertEquals(
+                "mavenCentral",
+                externalDeclaration.sourceText.substring(
+                    externalDeclaration.startOffset,
+                    externalDeclaration.endOffset,
+                ),
+            )
         }
     }
 

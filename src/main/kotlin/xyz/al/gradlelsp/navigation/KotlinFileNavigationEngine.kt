@@ -121,12 +121,7 @@ internal class KotlinFileNavigationEngine(
         check(!closed.get()) { "Kotlin navigation engine is closed" }
         return withTargetAnalysis(document, offset) { analysis ->
             val references = mutableListOf<SourceDefinition>()
-            val sourceUris = analysis.targets.mapNotNullTo(mutableSetOf()) { target ->
-                target.source?.uri
-            }
-            val visitedSourceUris = mutableSetOf<String>()
             workspaceDocuments.forEachDocument(document) { candidateDocument ->
-                if (candidateDocument.uri in sourceUris) visitedSourceUris += candidateDocument.uri
                 try {
                     analyzeWorkspaceDocument(candidateDocument, analysis.usesGradleModel) { parsedFile, context ->
                         PsiTreeUtil.collectElementsOfType(
@@ -167,9 +162,7 @@ internal class KotlinFileNavigationEngine(
                 }
             }
             if (includeDeclaration) {
-                analysis.targets.mapNotNullTo(references) { target ->
-                    target.source?.takeIf { source -> source.uri in visitedSourceUris }?.definition
-                }
+                references += declarationDefinitions(analysis)
             }
             references.distinctBy { reference ->
                 listOf(reference.uri, reference.startOffset, reference.endOffset)
@@ -179,6 +172,32 @@ internal class KotlinFileNavigationEngine(
                     .thenBy { reference -> reference.endOffset },
             )
         }
+    }
+
+    private fun declarationDefinitions(analysis: TargetAnalysis): List<SourceDefinition> {
+        val local = analysis.targets.mapNotNull { target -> target.source?.definition }
+        val externalTargets = analysis.targets.filter { target -> target.source == null }
+        if (externalTargets.isEmpty()) return local
+
+        val model = analysis.model ?: try {
+            val script = Path.of(URI.create(analysis.document.uri))
+            modelProvider.modelFor(script)
+        } catch (_: Exception) {
+            return local
+        }
+        val parser = if (analysis.model != null) {
+            analysis.parser
+        } else {
+            parserFor(analysis.document.fileName, model)
+        }
+        val external = externalTargets.flatMap { target ->
+            try {
+                externalSources.resolve(target.descriptor, model, parser)
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+        return local + external
     }
 
     override fun implementations(document: AnalysisDocument, offset: Int): List<SourceDefinition> {
@@ -335,7 +354,7 @@ internal class KotlinFileNavigationEngine(
         consume: (TargetAnalysis) -> List<SourceDefinition>,
     ): List<SourceDefinition> {
         val localAnalysis = try {
-            targetAnalysis(localParser, document, offset, usesGradleModel = false)
+            targetAnalysis(localParser, document, offset, usesGradleModel = false, model = null)
         } catch (_: Exception) {
             null
         }
@@ -346,7 +365,7 @@ internal class KotlinFileNavigationEngine(
         val script = Path.of(URI.create(document.uri))
         val model = modelProvider.modelFor(script)
         return withPinnedParser(document.fileName, model) { parser ->
-            val analysis = targetAnalysis(parser, document, offset, usesGradleModel = true)
+            val analysis = targetAnalysis(parser, document, offset, usesGradleModel = true, model = model)
             if (analysis.targets.isEmpty()) emptyList() else consume(analysis)
         }
     }
@@ -356,13 +375,14 @@ internal class KotlinFileNavigationEngine(
         document: AnalysisDocument,
         offset: Int,
         usesGradleModel: Boolean,
+        model: GradleKotlinDslModel?,
     ): TargetAnalysis {
         val parsedFile = parser.parse(document.fileName, document.text)
         val context = parser.bindingContext(parsedFile)
         val targets = semanticDescriptorsAt(parsedFile, context, offset)
             .map { descriptor -> semanticTarget(descriptor, parsedFile, document) }
             .distinctBy { target -> target.source ?: target.descriptor.original }
-        return TargetAnalysis(usesGradleModel, parsedFile, document, targets)
+        return TargetAnalysis(usesGradleModel, parser, model, parsedFile, document, targets)
     }
 
     private fun semanticDescriptorsAt(
@@ -730,6 +750,8 @@ internal class KotlinFileNavigationEngine(
 
     private data class TargetAnalysis(
         val usesGradleModel: Boolean,
+        val parser: KotlinAstParser,
+        val model: GradleKotlinDslModel?,
         val file: ParsedKotlinFile,
         val document: AnalysisDocument,
         val targets: List<SemanticTarget>,
