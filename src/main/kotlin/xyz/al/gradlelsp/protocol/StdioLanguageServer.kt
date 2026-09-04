@@ -4,9 +4,11 @@ import org.eclipse.lsp4j.launch.LSPLauncher
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.PrintStream
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ExecutionException
-import java.util.concurrent.Executors
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.Function
 
@@ -14,11 +16,19 @@ internal class StdioLanguageServer {
     fun run(input: InputStream, output: OutputStream, error: PrintStream): Int {
         val server = GradleLanguageServer(logger = ServerLogger(error::println))
         val threadNumber = AtomicInteger()
-        val executor = Executors.newFixedThreadPool(MAXIMUM_JSON_RPC_THREADS) { task ->
-            Thread(task, "gradle-lsp-jsonrpc-${threadNumber.incrementAndGet()}").apply {
-                isDaemon = true
-            }
-        }
+        val executor = ThreadPoolExecutor(
+            CORE_JSON_RPC_THREADS,
+            MAXIMUM_JSON_RPC_THREADS,
+            JSON_RPC_THREAD_KEEP_ALIVE_SECONDS,
+            TimeUnit.SECONDS,
+            ArrayBlockingQueue(MAXIMUM_PENDING_JSON_RPC_TASKS),
+            { task ->
+                Thread(task, "gradle-lsp-jsonrpc-${threadNumber.incrementAndGet()}").apply {
+                    isDaemon = true
+                }
+            },
+            ThreadPoolExecutor.CallerRunsPolicy(),
+        )
         val launcher = LSPLauncher.createServerLauncher(
             server,
             input,
@@ -48,6 +58,9 @@ internal class StdioLanguageServer {
     }
 
     private companion object {
+        const val CORE_JSON_RPC_THREADS = 2
         const val MAXIMUM_JSON_RPC_THREADS = 4
+        const val MAXIMUM_PENDING_JSON_RPC_TASKS = 128
+        const val JSON_RPC_THREAD_KEEP_ALIVE_SECONDS = 30L
     }
 }

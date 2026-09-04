@@ -35,9 +35,12 @@ import xyz.al.gradlelsp.presentation.LspDiagnosticMapper
 import xyz.al.gradlelsp.presentation.Utf16LineMap
 import xyz.al.gradlelsp.symbols.DocumentSymbolEngine
 import xyz.al.gradlelsp.symbols.defaultGradleDocumentSymbolEngine
+import java.util.LinkedHashMap
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
 internal class GradleTextDocumentService(
@@ -63,6 +66,10 @@ internal class GradleTextDocumentService(
 
     @Volatile
     private var supportedDocumentSymbolKinds = LspDocumentSymbolMapper.legacyKinds
+
+    private val analysisLock = Any()
+    private val pendingAnalysis = LinkedHashMap<String, DocumentSnapshot>()
+    private var analysisWorkerScheduled = false
 
     fun connect(client: LanguageClient) {
         this.client = client
@@ -110,7 +117,7 @@ internal class GradleTextDocumentService(
     ): CompletableFuture<Either<List<Location>, List<LocationLink>>> {
         val snapshot = documents.current(params.textDocument.uri)
             ?: return CompletableFuture.completedFuture(emptyDefinitions())
-        return CompletableFuture.supplyAsync(
+        return supplyAsync(
             {
                 try {
                     val offset = Utf16LineMap(snapshot.text).offsetAt(params.position)
@@ -139,7 +146,7 @@ internal class GradleTextDocumentService(
     ): CompletableFuture<Either<List<Location>, List<LocationLink>>> {
         val snapshot = documents.current(params.textDocument.uri)
             ?: return CompletableFuture.completedFuture(emptyDefinitions())
-        return CompletableFuture.supplyAsync(
+        return supplyAsync(
             {
                 try {
                     val offset = Utf16LineMap(snapshot.text).offsetAt(params.position)
@@ -168,7 +175,7 @@ internal class GradleTextDocumentService(
     ): CompletableFuture<Either<List<Location>, List<LocationLink>>> {
         val capture = documents.capture(params.textDocument.uri)
         val snapshot = capture.snapshot ?: return CompletableFuture.completedFuture(emptyDefinitions())
-        return CompletableFuture.supplyAsync(
+        return supplyAsync(
             {
                 try {
                     val offset = Utf16LineMap(snapshot.text).offsetAt(params.position)
@@ -197,7 +204,7 @@ internal class GradleTextDocumentService(
     override fun references(params: ReferenceParams): CompletableFuture<List<Location>> {
         val capture = documents.capture(params.textDocument.uri)
         val snapshot = capture.snapshot ?: return CompletableFuture.completedFuture(emptyList())
-        return CompletableFuture.supplyAsync(
+        return supplyAsync(
             {
                 try {
                     val offset = Utf16LineMap(snapshot.text).offsetAt(params.position)
@@ -229,7 +236,7 @@ internal class GradleTextDocumentService(
     ): CompletableFuture<Either<List<Location>, List<LocationLink>>> {
         val snapshot = documents.current(params.textDocument.uri)
             ?: return CompletableFuture.completedFuture(emptyDefinitions())
-        return CompletableFuture.supplyAsync(
+        return supplyAsync(
             {
                 try {
                     val offset = Utf16LineMap(snapshot.text).offsetAt(params.position)
@@ -258,7 +265,7 @@ internal class GradleTextDocumentService(
     ): CompletableFuture<List<Either<SymbolInformation, DocumentSymbol>>> {
         val snapshot = documents.current(params.textDocument.uri)
             ?: return CompletableFuture.completedFuture(emptyList())
-        return CompletableFuture.supplyAsync(
+        return supplyAsync(
             {
                 try {
                     val symbols = symbolEngine.symbols(
@@ -293,44 +300,91 @@ internal class GradleTextDocumentService(
     }
 
     private fun schedule(snapshot: DocumentSnapshot) {
-        analysisExecutor.execute {
-            try {
-                val diagnostics = analyzer.analyze(
-                    AnalysisDocument(snapshot.uri, snapshot.fileName, snapshot.text),
-                )
-                if (documents.isCurrent(snapshot)) {
-                    client?.publishDiagnostics(
-                        PublishDiagnosticsParams(
-                            snapshot.uri,
-                            LspDiagnosticMapper.map(snapshot.text, diagnostics),
-                            snapshot.version,
-                        ),
-                    )
+        val launchWorker = synchronized(analysisLock) {
+            pendingAnalysis[snapshot.uri] = snapshot
+            if (analysisWorkerScheduled) {
+                false
+            } else {
+                analysisWorkerScheduled = true
+                true
+            }
+        }
+        if (!launchWorker) return
+
+        try {
+            analysisExecutor.execute(::drainAnalysis)
+        } catch (_: RejectedExecutionException) {
+            synchronized(analysisLock) {
+                analysisWorkerScheduled = false
+                pendingAnalysis.clear()
+            }
+            logger.log("gradle-lsp: analysis queue is closed; diagnostics were not scheduled")
+        }
+    }
+
+    private fun drainAnalysis() {
+        while (true) {
+            val snapshot = synchronized(analysisLock) {
+                val entries = pendingAnalysis.entries.iterator()
+                if (!entries.hasNext()) {
+                    analysisWorkerScheduled = false
+                    null
+                } else {
+                    val pending = entries.next().value
+                    entries.remove()
+                    pending
                 }
-            } catch (failure: Exception) {
-                logger.log(
-                    "gradle-lsp: analysis failed for ${snapshot.uri}: " +
-                        (failure.message ?: failure::class.java.simpleName),
+            } ?: return
+            analyze(snapshot)
+        }
+    }
+
+    private fun analyze(snapshot: DocumentSnapshot) {
+        try {
+            val diagnostics = analyzer.analyze(
+                AnalysisDocument(snapshot.uri, snapshot.fileName, snapshot.text),
+            )
+            if (documents.isCurrent(snapshot)) {
+                client?.publishDiagnostics(
+                    PublishDiagnosticsParams(
+                        snapshot.uri,
+                        LspDiagnosticMapper.map(snapshot.text, diagnostics),
+                        snapshot.version,
+                    ),
                 )
             }
+        } catch (failure: Exception) {
+            logger.log(
+                "gradle-lsp: analysis failed for ${snapshot.uri}: " +
+                    (failure.message ?: failure::class.java.simpleName),
+            )
         }
     }
 
     override fun close() {
-        shutdown(analysisExecutor)
-        shutdown(navigationExecutor)
-        shutdown(symbolExecutor)
-        analyzer.close()
-        navigation.close()
-        symbolEngine.close()
+        synchronized(analysisLock) { pendingAnalysis.clear() }
+        if (shutdown(analysisExecutor)) analyzer.close()
+        if (shutdown(navigationExecutor)) navigation.close()
+        if (shutdown(symbolExecutor)) symbolEngine.close()
     }
 
-    private fun shutdown(executor: ExecutorService) {
+    private fun shutdown(executor: ExecutorService): Boolean {
         executor.shutdown()
-        if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
-            executor.shutdownNow()
-        }
+        if (executor.awaitTermination(EXECUTOR_SHUTDOWN_SECONDS, TimeUnit.SECONDS)) return true
+        executor.shutdownNow()
+        return executor.awaitTermination(EXECUTOR_SHUTDOWN_SECONDS, TimeUnit.SECONDS)
     }
+
+    private fun <T> supplyAsync(
+        action: () -> T,
+        executor: ExecutorService,
+    ): CompletableFuture<T> =
+        try {
+            CompletableFuture.supplyAsync({ action() }, executor)
+        } catch (failure: RejectedExecutionException) {
+            logger.log("gradle-lsp: request queue is full; request was rejected")
+            CompletableFuture.failedFuture(failure)
+        }
 
     private fun emptyDefinitions(): Either<List<Location>, List<LocationLink>> =
         Either.forLeft(emptyList())
@@ -343,8 +397,17 @@ internal class GradleTextDocumentService(
         fun newSymbolExecutor(): ExecutorService = newExecutor("gradle-lsp-symbols")
 
         fun newExecutor(threadName: String): ExecutorService =
-            Executors.newSingleThreadExecutor { task ->
-                Thread(task, threadName).apply { isDaemon = true }
-            }
+            ThreadPoolExecutor(
+                1,
+                1,
+                0L,
+                TimeUnit.MILLISECONDS,
+                ArrayBlockingQueue(MAXIMUM_PENDING_TASKS),
+                { task -> Thread(task, threadName).apply { isDaemon = true } },
+                ThreadPoolExecutor.AbortPolicy(),
+            )
+
+        const val MAXIMUM_PENDING_TASKS = 16
+        const val EXECUTOR_SHUTDOWN_SECONDS = 5L
     }
 }

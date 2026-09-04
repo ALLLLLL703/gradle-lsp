@@ -3,6 +3,8 @@ package xyz.al.gradlelsp.protocol
 import org.eclipse.lsp4j.ClientCapabilities
 import org.eclipse.lsp4j.DeclarationParams
 import org.eclipse.lsp4j.DefinitionParams
+import org.eclipse.lsp4j.DidChangeTextDocumentParams
+import org.eclipse.lsp4j.DidOpenTextDocumentParams
 import org.eclipse.lsp4j.DocumentSymbolCapabilities
 import org.eclipse.lsp4j.DocumentSymbolParams
 import org.eclipse.lsp4j.ImplementationParams
@@ -12,8 +14,11 @@ import org.eclipse.lsp4j.ReferenceContext
 import org.eclipse.lsp4j.ReferenceParams
 import org.eclipse.lsp4j.SymbolKind
 import org.eclipse.lsp4j.TextDocumentClientCapabilities
+import org.eclipse.lsp4j.TextDocumentContentChangeEvent
 import org.eclipse.lsp4j.TextDocumentIdentifier
+import org.eclipse.lsp4j.TextDocumentItem
 import org.eclipse.lsp4j.TypeDefinitionParams
+import org.eclipse.lsp4j.VersionedTextDocumentIdentifier
 import org.eclipse.lsp4j.WorkspaceFolder
 import org.eclipse.lsp4j.jsonrpc.services.ServiceEndpoints
 import xyz.al.gradlelsp.analysis.AnalysisDocument
@@ -25,6 +30,7 @@ import xyz.al.gradlelsp.navigation.DocumentNavigationEngine
 import xyz.al.gradlelsp.navigation.SourceDefinition
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -457,6 +463,48 @@ class GradleDefinitionIntegrationTest {
 
             assertTrue(response.join().isEmpty())
         }
+    }
+
+    @Test
+    fun `diagnostic scheduling coalesces superseded full document snapshots`() {
+        val script = Path.of("build.gradle.kts").toAbsolutePath().normalize()
+        val uri = script.toUri().toString()
+        val enteredFirstAnalysis = CountDownLatch(1)
+        val continueFirstAnalysis = CountDownLatch(1)
+        val analyzed = CopyOnWriteArrayList<String>()
+        val analyzedLatest = CountDownLatch(1)
+        val analyzer = object : DocumentAnalyzer {
+            override fun analyze(document: AnalysisDocument): List<SourceDiagnostic> {
+                analyzed += document.text
+                if (analyzed.size == 1) {
+                    enteredFirstAnalysis.countDown()
+                    check(continueFirstAnalysis.await(5, TimeUnit.SECONDS))
+                } else {
+                    analyzedLatest.countDown()
+                }
+                return emptyList()
+            }
+        }
+        val textDocuments = GradleTextDocumentService(analyzer = analyzer)
+
+        textDocuments.use {
+            textDocuments.didOpen(
+                DidOpenTextDocumentParams(TextDocumentItem(uri, "kotlin", 1, "version 1")),
+            )
+            assertTrue(enteredFirstAnalysis.await(5, TimeUnit.SECONDS))
+            (2..20).forEach { version ->
+                textDocuments.didChange(
+                    DidChangeTextDocumentParams(
+                        VersionedTextDocumentIdentifier(uri, version),
+                        listOf(TextDocumentContentChangeEvent("version $version")),
+                    ),
+                )
+            }
+            continueFirstAnalysis.countDown()
+            assertTrue(analyzedLatest.await(5, TimeUnit.SECONDS))
+        }
+
+        assertEquals(listOf("version 1", "version 20"), analyzed)
     }
 
     @Test
