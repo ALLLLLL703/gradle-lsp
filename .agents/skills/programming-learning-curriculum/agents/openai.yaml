@@ -1,0 +1,4 @@
+interface:
+  display_name: "Programming Learning Curriculum"
+  short_description: "Language, library, and architecture learning workflow"
+  default_prompt: "Use $programming-learning-curriculum to plan and teach this programming topic with a staged outline, exercises, and learn/*.md notes."

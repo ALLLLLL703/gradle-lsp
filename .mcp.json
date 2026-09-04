@@ -1,0 +1,18 @@
+{
+	"mcpServers": {
+		"dap": {
+			"url": "http://localhost:12323/mcp"
+		},
+		"neovim": {
+			"command": "npx",
+			"args": [
+				"-y",
+				"mcp-neovim-server"
+			],
+			"env": {
+				"ALLOW_SHELL_COMMANDS": "true",
+				"NVIM_SOCKET_PATH": "/tmp/nvim-gradle-lsp"
+			}
+		}
+	}
+}
