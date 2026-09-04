@@ -18,6 +18,8 @@ import xyz.al.gradlelsp.documents.ExternalDocumentStore
 import xyz.al.gradlelsp.navigation.DocumentNavigationEngine
 import xyz.al.gradlelsp.navigation.SourceDefinition
 import java.nio.file.Path
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -143,6 +145,40 @@ class GradleDefinitionIntegrationTest {
             assertEquals(SymbolKind.Object, flat.map { it.left }.single { it.name == "Registry" }.kind)
             assertEquals(SymbolKind.EnumMember, flat.map { it.left }.single { it.name == "FAST" }.kind)
             assertTrue(flat.map { it.left }.none { it.name == "local" })
+        }
+    }
+
+    @Test
+    fun `stale definition is discarded after an identical close and reopen`() {
+        val text = "val answer = 42\nanswer\n"
+        val script = Path.of("build.gradle.kts").toAbsolutePath().normalize()
+        val uri = script.toUri().toString()
+        val documents = DocumentStore().apply { open(uri, 1, text) }
+        val enteredNavigation = CountDownLatch(1)
+        val continueNavigation = CountDownLatch(1)
+        val navigation = object : DocumentNavigationEngine {
+            override fun definitions(document: AnalysisDocument, offset: Int): List<SourceDefinition> {
+                enteredNavigation.countDown()
+                check(continueNavigation.await(5, TimeUnit.SECONDS))
+                return listOf(SourceDefinition(uri, text, 4, 10))
+            }
+        }
+        val textDocuments = GradleTextDocumentService(
+            documents = documents,
+            analyzer = noAnalysis(),
+            navigation = navigation,
+        )
+
+        GradleLanguageServer(textDocuments = textDocuments).use {
+            val response = textDocuments.definition(
+                DefinitionParams(TextDocumentIdentifier(uri), Position(1, 1)),
+            )
+            assertTrue(enteredNavigation.await(5, TimeUnit.SECONDS))
+            documents.close(uri)
+            documents.open(uri, 1, text)
+            continueNavigation.countDown()
+
+            assertTrue(response.join().left.isEmpty())
         }
     }
 

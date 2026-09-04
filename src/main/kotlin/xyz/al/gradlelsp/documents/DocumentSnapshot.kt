@@ -1,6 +1,7 @@
 package xyz.al.gradlelsp.documents
 
-internal data class DocumentSnapshot(
+/** Immutable document state whose identity distinguishes close/reopen generations. */
+internal class DocumentSnapshot(
     val uri: String,
     val fileName: String,
     val version: Int,
