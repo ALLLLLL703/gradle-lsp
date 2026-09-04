@@ -12,5 +12,8 @@ internal data class SourceDefinition(
 internal interface DocumentNavigationEngine : AutoCloseable {
     fun definitions(document: AnalysisDocument, offset: Int): List<SourceDefinition>
 
+    fun declarations(document: AnalysisDocument, offset: Int): List<SourceDefinition> =
+        definitions(document, offset)
+
     override fun close() = Unit
 }

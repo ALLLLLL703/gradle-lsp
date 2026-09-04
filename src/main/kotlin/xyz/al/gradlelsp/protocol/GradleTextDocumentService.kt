@@ -1,5 +1,6 @@
 package xyz.al.gradlelsp.protocol
 
+import org.eclipse.lsp4j.DeclarationParams
 import org.eclipse.lsp4j.DidChangeTextDocumentParams
 import org.eclipse.lsp4j.DefinitionParams
 import org.eclipse.lsp4j.DidCloseTextDocumentParams
@@ -112,6 +113,34 @@ internal class GradleTextDocumentService(
                 } catch (failure: Exception) {
                     logger.log(
                         "gradle-lsp: definition failed for ${params.textDocument.uri}: " +
+                            (failure.message ?: failure::class.java.simpleName),
+                    )
+                    emptyDefinitions()
+                }
+            },
+            navigationExecutor,
+        )
+
+    override fun declaration(
+        params: DeclarationParams,
+    ): CompletableFuture<Either<List<Location>, List<LocationLink>>> =
+        CompletableFuture.supplyAsync(
+            {
+                try {
+                    val snapshot = documents.current(params.textDocument.uri)
+                        ?: return@supplyAsync emptyDefinitions()
+                    val offset = Utf16LineMap(snapshot.text).offsetAt(params.position)
+                        ?: return@supplyAsync emptyDefinitions()
+                    val declarations = navigation.declarations(
+                        AnalysisDocument(snapshot.uri, snapshot.fileName, snapshot.text),
+                        offset,
+                    )
+                    if (!documents.isCurrent(snapshot)) return@supplyAsync emptyDefinitions()
+
+                    Either.forLeft(declarations.map(LspDefinitionMapper::map))
+                } catch (failure: Exception) {
+                    logger.log(
+                        "gradle-lsp: declaration failed for ${params.textDocument.uri}: " +
                             (failure.message ?: failure::class.java.simpleName),
                     )
                     emptyDefinitions()

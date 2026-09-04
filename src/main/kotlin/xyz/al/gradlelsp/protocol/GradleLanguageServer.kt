@@ -29,6 +29,7 @@ internal class GradleLanguageServer(
     override fun initialize(params: InitializeParams): CompletableFuture<InitializeResult> {
         val capabilities = ServerCapabilities()
         capabilities.setTextDocumentSync(TextDocumentSyncKind.Full)
+        capabilities.setDeclarationProvider(true)
         capabilities.setDefinitionProvider(true)
         capabilities.setDocumentSymbolProvider(true)
         capabilities.experimental = mapOf(

@@ -1,6 +1,7 @@
 package xyz.al.gradlelsp.protocol
 
 import org.eclipse.lsp4j.ClientCapabilities
+import org.eclipse.lsp4j.DeclarationParams
 import org.eclipse.lsp4j.DefinitionParams
 import org.eclipse.lsp4j.DocumentSymbolCapabilities
 import org.eclipse.lsp4j.DocumentSymbolParams
@@ -183,7 +184,7 @@ class GradleDefinitionIntegrationTest {
     }
 
     @Test
-    fun `definition resolves a recovered local symbol from an LSP UTF-16 position`() {
+    fun `definition and declaration resolve a recovered local symbol from an LSP UTF-16 position`() {
         val text = """
             val answer = 42
             val broken =
@@ -196,16 +197,20 @@ class GradleDefinitionIntegrationTest {
 
         GradleLanguageServer(textDocuments = textDocuments).use { server ->
             val capabilities = server.initialize(InitializeParams()).join().capabilities
+            assertTrue(capabilities.declarationProvider.left)
             assertTrue(capabilities.definitionProvider.left)
 
-            val response = textDocuments.definition(
+            val definition = textDocuments.definition(
                 DefinitionParams(TextDocumentIdentifier(uri), Position(2, 19)),
-            ).join()
-            val location = response.left.single()
+            ).join().left.single()
+            val declaration = textDocuments.declaration(
+                DeclarationParams(TextDocumentIdentifier(uri), Position(2, 19)),
+            ).join().left.single()
 
-            assertEquals(uri, location.uri)
-            assertEquals(Position(0, 4), location.range.start)
-            assertEquals(Position(0, 10), location.range.end)
+            assertEquals(uri, definition.uri)
+            assertEquals(Position(0, 4), definition.range.start)
+            assertEquals(Position(0, 10), definition.range.end)
+            assertEquals(definition, declaration)
         }
     }
 
