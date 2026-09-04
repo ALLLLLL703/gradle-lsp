@@ -1,1 +1,1 @@
-rootproject.name = "gradle-lsp"
+rootProject.name = "gradle-lsp"
