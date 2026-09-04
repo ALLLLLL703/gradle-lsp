@@ -4,6 +4,7 @@ package xyz.al.gradlelsp.navigation
 
 import org.jetbrains.kotlin.com.intellij.psi.util.PsiTreeUtil
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
+import org.jetbrains.kotlin.descriptors.ClassKind
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
 import org.jetbrains.kotlin.descriptors.DeserializedDescriptor
 import org.jetbrains.kotlin.descriptors.PackageFragmentDescriptor
@@ -26,7 +27,7 @@ internal class KotlinDescriptorStubDecompiler(
         val declaration = descriptor.navigationDeclaration()
         val binaryOrigin = binaryOrigin(declaration) ?: return null
         val packageName = declaration.packageName().orEmpty()
-        val rendered = DescriptorRenderer.FQ_NAMES_IN_TYPES.render(declaration)
+        val rendered = renderWithContainers(declaration)
         val text = buildString {
             appendLine("// IntelliJ-style Kotlin decompiler stub generated from a class file")
             appendLine("// Implementation of methods is not available")
@@ -41,7 +42,7 @@ internal class KotlinDescriptorStubDecompiler(
         val parsed = parser.parse(fileName, text)
         val target = PsiTreeUtil.collectElementsOfType(parsed.psi, KtNamedDeclaration::class.java)
             .asSequence()
-            .firstOrNull { candidate -> candidate.name == declaration.name.asString() }
+            .lastOrNull { candidate -> candidate.name == declaration.name.asString() }
             ?: return null
         val range = target.nameIdentifier?.textRange ?: return null
         val external = documents.register(
@@ -51,6 +52,25 @@ internal class KotlinDescriptorStubDecompiler(
             text = text,
         )
         return SourceDefinition(external.uri, external.text, range.startOffset, range.endOffset)
+    }
+
+    private fun renderWithContainers(descriptor: DeclarationDescriptor): String {
+        var rendered = DescriptorRenderer.FQ_NAMES_IN_TYPES.render(descriptor)
+        val containers = generateSequence(descriptor.containingDeclaration) { declaration ->
+            declaration.containingDeclaration
+        }.filterIsInstance<ClassDescriptor>().toList()
+        containers.forEach { container ->
+            val keyword = when (container.kind) {
+                ClassKind.INTERFACE -> "interface"
+                ClassKind.OBJECT -> "object"
+                ClassKind.ENUM_CLASS -> "enum class"
+                ClassKind.ANNOTATION_CLASS -> "annotation class"
+                else -> "class"
+            }
+            val indented = rendered.lineSequence().joinToString("\n") { line -> "    $line" }
+            rendered = "$keyword `${container.name.asString()}` {\n$indented\n}"
+        }
+        return rendered
     }
 
     private fun binaryOrigin(descriptor: DeclarationDescriptor): String? {

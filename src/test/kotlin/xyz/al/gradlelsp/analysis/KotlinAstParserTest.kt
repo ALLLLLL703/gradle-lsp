@@ -84,7 +84,11 @@ class KotlinAstParserTest {
         )
         val sourceJar = Path.of((tuplesSource.openConnection() as JarURLConnection).jarFileURL.toURI())
         val model = baseModel.copy(sourcePath = listOf(sourceJar))
-        val text = "val pair = Pair(1, 2)"
+        val text = """
+            val broken =
+            val recovered = 1
+            val pair = Pair(1, 2)
+        """.trimIndent()
         val document = AnalysisDocument(script.toUri().toString(), script.fileName.toString(), text)
 
         KotlinFileNavigationEngine(modelProvider = { model }).use { navigation ->
@@ -109,6 +113,7 @@ class KotlinAstParserTest {
             import org.gradle.kotlin.dsl.KotlinProjectScriptTemplate
 
             val templateType = KotlinProjectScriptTemplate::class
+            fun buildscriptOf(template: KotlinProjectScriptTemplate) = template.getBuildscript()
         """.trimIndent()
         val document = AnalysisDocument(script.toUri().toString(), script.fileName.toString(), text)
 
@@ -123,6 +128,15 @@ class KotlinAstParserTest {
                 definition.sourceText.substring(definition.startOffset, definition.endOffset),
             )
             assertTrue(definition.sourceText.contains("class KotlinProjectScriptTemplate"))
+
+            val methodReference = text.indexOf("getBuildscript")
+            val method = navigation.definitions(document, methodReference).single()
+            assertEquals(
+                "getBuildscript",
+                method.sourceText.substring(method.startOffset, method.endOffset),
+            )
+            assertTrue(method.sourceText.contains("class `KotlinProjectScriptTemplate`"))
+            assertTrue(method.sourceText.contains("fun getBuildscript"))
         }
     }
 
@@ -155,6 +169,8 @@ class KotlinAstParserTest {
     fun `external Java declaration falls back to JD-Core`() {
         val script = Path.of("build.gradle.kts").toAbsolutePath().normalize()
         val text = """
+            val broken =
+            val recovered = 1
             repositories {
                 mavenCentral()
             }
