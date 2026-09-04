@@ -3,6 +3,8 @@
 ## Scope
 
 - Implement Gradle Kotlin DSL (`*.gradle.kts`) support before Groovy DSL support.
+- All Kotlin/Java package names must begin with `xyz.al.gradlelsp`.
+- If the build is split into multiple Gradle projects, use the same `xyz.al.gradlelsp` namespace prefix for project/module identities where applicable.
 - Keep protocol transport, document storage, compiler analysis, Gradle model loading, and presentation mapping in separate packages.
 
 ## AST-first analysis
