@@ -2,7 +2,10 @@ package xyz.al.gradlelsp.navigation
 
 import xyz.al.gradlelsp.analysis.AnalysisDocument
 import xyz.al.gradlelsp.analysis.GradleDsl
+import xyz.al.gradlelsp.documents.DocumentStore
 import xyz.al.gradlelsp.documents.ExternalDocumentStore
+import xyz.al.gradlelsp.documents.GradleWorkspaceDocumentSource
+import xyz.al.gradlelsp.documents.WorkspaceDocumentSource
 import java.util.EnumMap
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -34,6 +37,13 @@ internal class GradleNavigationEngine(
     override fun typeDefinitions(document: AnalysisDocument, offset: Int): List<SourceDefinition> =
         engineFor(document)?.typeDefinitions(document, offset).orEmpty()
 
+    override fun references(
+        document: AnalysisDocument,
+        offset: Int,
+        includeDeclaration: Boolean,
+    ): List<SourceDefinition> =
+        engineFor(document)?.references(document, offset, includeDeclaration).orEmpty()
+
     private fun engineFor(document: AnalysisDocument): DocumentNavigationEngine? {
         check(!closed.get()) { "Gradle navigation engine is closed" }
         return synchronized(this) {
@@ -53,8 +63,12 @@ internal class GradleNavigationEngine(
 
 internal fun defaultGradleNavigationEngine(
     externalDocuments: ExternalDocumentStore = ExternalDocumentStore(),
+    workspaceDocuments: WorkspaceDocumentSource = GradleWorkspaceDocumentSource(DocumentStore()),
 ): GradleNavigationEngine =
     GradleNavigationEngine().use(
         GradleDsl.KOTLIN,
-        KotlinFileNavigationEngine(externalDocuments = externalDocuments),
+        KotlinFileNavigationEngine(
+            externalDocuments = externalDocuments,
+            workspaceDocuments = workspaceDocuments,
+        ),
     )

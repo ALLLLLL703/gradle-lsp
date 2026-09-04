@@ -38,7 +38,7 @@ internal class GradleKotlinDslModelLoader(
     @Synchronized
     override fun modelFor(script: Path): GradleKotlinDslModel {
         val normalizedScript = script.toAbsolutePath().normalize()
-        val projectRoot = findProjectRoot(normalizedScript)
+        val projectRoot = GradleProjectRootLocator.findFor(normalizedScript)
         val cached = models[normalizedScript]
         val fingerprint = modelInputFingerprint(
             normalizedScript,
@@ -113,14 +113,6 @@ internal class GradleKotlinDslModelLoader(
                     watchedBuildRoots = buildRoots,
                 )
             }
-    }
-
-    private fun findProjectRoot(script: Path): Path {
-        val scriptDirectory = script.parent ?: Path.of("").toAbsolutePath()
-        val ancestors = generateSequence(scriptDirectory, Path::getParent).toList()
-        return ancestors.firstOrNull(::containsSettingsScript)
-            ?: ancestors.firstOrNull { Files.isRegularFile(it.resolve("gradlew")) }
-            ?: scriptDirectory
     }
 
     private fun modelInputFingerprint(
@@ -255,10 +247,6 @@ internal class GradleKotlinDslModelLoader(
             name == "gradle.properties" ||
             name == "gradle-wrapper.properties"
     }
-
-    private fun containsSettingsScript(directory: Path): Boolean =
-        Files.isRegularFile(directory.resolve("settings.gradle.kts")) ||
-            Files.isRegularFile(directory.resolve("settings.gradle"))
 
     private data class CachedGradleModel(
         val fingerprint: String,

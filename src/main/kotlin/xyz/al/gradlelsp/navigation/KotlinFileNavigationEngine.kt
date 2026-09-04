@@ -2,6 +2,7 @@
 
 package xyz.al.gradlelsp.navigation
 
+import org.jetbrains.kotlin.com.intellij.openapi.util.TextRange
 import org.jetbrains.kotlin.com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.com.intellij.psi.util.PsiTreeUtil
 import org.jetbrains.kotlin.descriptors.CallableDescriptor
@@ -13,12 +14,18 @@ import org.jetbrains.kotlin.descriptors.ReceiverParameterDescriptor
 import org.jetbrains.kotlin.descriptors.TypeAliasDescriptor
 import org.jetbrains.kotlin.descriptors.TypeParameterDescriptor
 import org.jetbrains.kotlin.descriptors.VariableDescriptor
+import org.jetbrains.kotlin.psi.KtDeclaration
 import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtNamedDeclaration
+import org.jetbrains.kotlin.psi.KtPrimaryConstructor
+import org.jetbrains.kotlin.psi.KtPropertyAccessor
+import org.jetbrains.kotlin.psi.KtSecondaryConstructor
 import org.jetbrains.kotlin.psi.KtTypeReference
 import org.jetbrains.kotlin.resolve.BindingContext
+import org.jetbrains.kotlin.resolve.DescriptorEquivalenceForOverrides
 import org.jetbrains.kotlin.resolve.DescriptorToSourceUtils
+import org.jetbrains.kotlin.resolve.calls.util.getResolvedCall
 import org.jetbrains.kotlin.types.KotlinType
 import org.jetbrains.kotlin.types.isError
 import xyz.al.gradlelsp.analysis.AnalysisDocument
@@ -26,7 +33,10 @@ import xyz.al.gradlelsp.analysis.KotlinAstParser
 import xyz.al.gradlelsp.analysis.KotlinGradleScriptTemplate
 import xyz.al.gradlelsp.analysis.KotlinScriptAnalysisContext
 import xyz.al.gradlelsp.analysis.ParsedKotlinFile
+import xyz.al.gradlelsp.documents.DocumentStore
 import xyz.al.gradlelsp.documents.ExternalDocumentStore
+import xyz.al.gradlelsp.documents.GradleWorkspaceDocumentSource
+import xyz.al.gradlelsp.documents.WorkspaceDocumentSource
 import xyz.al.gradlelsp.gradle.GradleKotlinDslModel
 import xyz.al.gradlelsp.gradle.GradleKotlinDslModelLoader
 import xyz.al.gradlelsp.gradle.GradleKotlinDslModelProvider
@@ -38,10 +48,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal class KotlinFileNavigationEngine(
     private val modelProvider: GradleKotlinDslModelProvider = GradleKotlinDslModelLoader(),
     externalDocuments: ExternalDocumentStore = ExternalDocumentStore(),
+    private val workspaceDocuments: WorkspaceDocumentSource = GradleWorkspaceDocumentSource(DocumentStore()),
     private val localParser: KotlinAstParser = KotlinAstParser(),
 ) : DocumentNavigationEngine {
     private val closed = AtomicBoolean(false)
     private val modelParsers = LinkedHashMap<ParserKey, KotlinAstParser>(8, 0.75f, true)
+    private val pinnedModelParsers = mutableMapOf<ParserKey, PinnedParser>()
     private val externalSources = KotlinExternalSourceResolver(externalDocuments)
 
     override fun definitions(document: AnalysisDocument, offset: Int): List<SourceDefinition> {
@@ -96,6 +108,203 @@ internal class KotlinFileNavigationEngine(
             listOf(definition.uri, definition.startOffset, definition.endOffset)
         }
     }
+
+    override fun references(
+        document: AnalysisDocument,
+        offset: Int,
+        includeDeclaration: Boolean,
+    ): List<SourceDefinition> {
+        check(!closed.get()) { "Kotlin navigation engine is closed" }
+        return withTargetAnalysis(document, offset) { analysis ->
+            val references = mutableListOf<SourceDefinition>()
+            val sourceUris = analysis.targets.mapNotNullTo(mutableSetOf()) { target ->
+                target.source?.uri
+            }
+            val visitedSourceUris = mutableSetOf<String>()
+            workspaceDocuments.forEachDocument(document) { candidateDocument ->
+                if (candidateDocument.uri in sourceUris) visitedSourceUris += candidateDocument.uri
+                try {
+                    analyzeWorkspaceDocument(candidateDocument, analysis.usesGradleModel) { parsedFile, context ->
+                        PsiTreeUtil.collectElementsOfType(
+                            parsedFile.psi,
+                            KtNameReferenceExpression::class.java,
+                        ).forEach { reference ->
+                            val matches = referenceDescriptors(context, reference)
+                                .flatMap { descriptor ->
+                                    buildList {
+                                        add(semanticTarget(descriptor, parsedFile, candidateDocument))
+                                        if (descriptor is ConstructorDescriptor) {
+                                            add(
+                                                semanticTarget(
+                                                    descriptor.constructedClass,
+                                                    parsedFile,
+                                                    candidateDocument,
+                                                ),
+                                            )
+                                        }
+                                    }
+                                }
+                                .any { candidate ->
+                                    analysis.targets.any { target -> sameTarget(target, candidate) }
+                                }
+                            if (matches) {
+                                val range = reference.textRange
+                                references += SourceDefinition(
+                                    candidateDocument.uri,
+                                    candidateDocument.text,
+                                    range.startOffset,
+                                    range.endOffset,
+                                )
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                    // One invalid or unavailable script model must not abort the workspace scan.
+                }
+            }
+            if (includeDeclaration) {
+                analysis.targets.mapNotNullTo(references) { target ->
+                    target.source?.takeIf { source -> source.uri in visitedSourceUris }?.definition
+                }
+            }
+            references.distinctBy { reference ->
+                listOf(reference.uri, reference.startOffset, reference.endOffset)
+            }.sortedWith(
+                compareBy<SourceDefinition> { reference -> reference.uri }
+                    .thenBy { reference -> reference.startOffset }
+                    .thenBy { reference -> reference.endOffset },
+            )
+        }
+    }
+
+    private fun withTargetAnalysis(
+        document: AnalysisDocument,
+        offset: Int,
+        consume: (TargetAnalysis) -> List<SourceDefinition>,
+    ): List<SourceDefinition> {
+        val localAnalysis = try {
+            targetAnalysis(localParser, document, offset, usesGradleModel = false)
+        } catch (_: Exception) {
+            null
+        }
+        if (localAnalysis != null && localAnalysis.targets.isNotEmpty()) {
+            return consume(localAnalysis)
+        }
+
+        val script = Path.of(URI.create(document.uri))
+        val model = modelProvider.modelFor(script)
+        return withPinnedParser(document.fileName, model) { parser ->
+            val analysis = targetAnalysis(parser, document, offset, usesGradleModel = true)
+            if (analysis.targets.isEmpty()) emptyList() else consume(analysis)
+        }
+    }
+
+    private fun targetAnalysis(
+        parser: KotlinAstParser,
+        document: AnalysisDocument,
+        offset: Int,
+        usesGradleModel: Boolean,
+    ): TargetAnalysis {
+        val parsedFile = parser.parse(document.fileName, document.text)
+        val context = parser.bindingContext(parsedFile)
+        val targets = semanticDescriptorsAt(parsedFile, context, offset)
+            .map { descriptor -> semanticTarget(descriptor, parsedFile, document) }
+            .distinctBy { target -> target.source ?: target.descriptor.original }
+        return TargetAnalysis(usesGradleModel, targets)
+    }
+
+    private fun semanticDescriptorsAt(
+        file: ParsedKotlinFile,
+        context: BindingContext,
+        offset: Int,
+    ): List<DeclarationDescriptor> {
+        semanticDeclarationAt(file, offset)?.let { declaration ->
+            val descriptor = when (declaration) {
+                is KtPrimaryConstructor,
+                is KtSecondaryConstructor,
+                -> context[BindingContext.CONSTRUCTOR, declaration]
+                is KtPropertyAccessor -> context[BindingContext.PROPERTY_ACCESSOR, declaration]
+                else -> context[BindingContext.DECLARATION_TO_DESCRIPTOR, declaration]
+            }
+            return listOfNotNull(descriptor)
+        }
+        val reference = referenceAt(file, offset) ?: return emptyList()
+        return referenceDescriptors(context, reference)
+    }
+
+    private fun analyzeWorkspaceDocument(
+        document: AnalysisDocument,
+        usesGradleModel: Boolean,
+        consume: (ParsedKotlinFile, BindingContext) -> Unit,
+    ) {
+        val parser = if (usesGradleModel) {
+            val script = Path.of(URI.create(document.uri))
+            parserFor(document.fileName, modelProvider.modelFor(script))
+        } else {
+            localParser
+        }
+        val parsedFile = parser.parse(document.fileName, document.text)
+        consume(parsedFile, parser.bindingContext(parsedFile))
+    }
+
+    private fun semanticTarget(
+        descriptor: DeclarationDescriptor,
+        file: ParsedKotlinFile,
+        document: AnalysisDocument,
+    ): SemanticTarget {
+        val declaration = when (descriptor) {
+            is PropertyAccessorDescriptor -> descriptor.correspondingProperty.original
+            else -> descriptor.original
+        }
+        val sourceElement = DescriptorToSourceUtils.getSourceFromDescriptor(declaration)
+            ?.takeIf { source -> source.containingFile === file.psi }
+        val source = sourceElement?.let { element ->
+            val range = declarationSelectionRange(element)
+            val definition = SourceDefinition(
+                document.uri,
+                document.text,
+                range.startOffset,
+                range.endOffset,
+            )
+            SourceDeclaration(
+                uri = document.uri,
+                role = declarationRole(declaration),
+                startOffset = range.startOffset,
+                endOffset = range.endOffset,
+                definition = definition,
+            )
+        }
+        return SemanticTarget(declaration, source)
+    }
+
+    private fun sameTarget(first: SemanticTarget, second: SemanticTarget): Boolean {
+        if (first.source != null || second.source != null) return first.source == second.source
+        val firstDescriptor = first.descriptor
+        val secondDescriptor = second.descriptor
+        if (firstDescriptor is TypeAliasDescriptor && secondDescriptor is TypeAliasDescriptor) {
+            return org.jetbrains.kotlin.resolve.DescriptorUtils.getFqNameSafe(firstDescriptor) ==
+                org.jetbrains.kotlin.resolve.DescriptorUtils.getFqNameSafe(secondDescriptor)
+        }
+        return runCatching {
+            DescriptorEquivalenceForOverrides.areEquivalent(
+                firstDescriptor,
+                secondDescriptor,
+                allowCopiesFromTheSameDeclaration = true,
+                distinguishExpectsAndNonExpects = true,
+            )
+        }.getOrDefault(false)
+    }
+
+    private fun declarationRole(descriptor: DeclarationDescriptor): DeclarationRole =
+        when (descriptor) {
+            is ConstructorDescriptor -> DeclarationRole.CONSTRUCTOR
+            is ClassDescriptor -> DeclarationRole.CLASS
+            is TypeAliasDescriptor -> DeclarationRole.TYPE_ALIAS
+            is TypeParameterDescriptor -> DeclarationRole.TYPE_PARAMETER
+            is VariableDescriptor -> DeclarationRole.VARIABLE
+            is CallableDescriptor -> DeclarationRole.CALLABLE
+            else -> DeclarationRole.OTHER
+        }
 
     private fun localTypeDefinitions(
         document: AnalysisDocument,
@@ -191,14 +400,21 @@ internal class KotlinFileNavigationEngine(
         parser: KotlinAstParser,
         file: ParsedKotlinFile,
         reference: KtNameReferenceExpression,
+    ): List<DeclarationDescriptor> =
+        referenceDescriptors(parser.bindingContext(file), reference)
+
+    private fun referenceDescriptors(
+        context: BindingContext,
+        reference: KtNameReferenceExpression,
     ): List<DeclarationDescriptor> {
-        val context = parser.bindingContext(file)
+        val constructor = reference.getResolvedCall(context)?.resultingDescriptor as? ConstructorDescriptor
         val direct = context[BindingContext.REFERENCE_TARGET, reference]
-        val referenced = direct?.let(::listOf)
+        val referenced = constructor?.let(::listOf)
+            ?: direct?.let(::listOf)
             ?: context[BindingContext.AMBIGUOUS_REFERENCE_TARGET, reference].orEmpty()
         return referenced
             .flatMap(DescriptorToSourceUtils::getEffectiveReferencedDescriptors)
-            .distinctBy { descriptor -> CompilerDeclarationIdentity.from(descriptor) }
+            .distinctBy { descriptor -> descriptor.original }
     }
 
     private fun referenceAt(file: ParsedKotlinFile, offset: Int): KtNameReferenceExpression? =
@@ -208,6 +424,20 @@ internal class KotlinFileNavigationEngine(
             }
             .filter { containsOffset(it, offset) }
             .minByOrNull { it.textRange.length }
+
+    private fun semanticDeclarationAt(file: ParsedKotlinFile, offset: Int): KtDeclaration? =
+        elementsAround(file, offset)
+            .flatMap { element ->
+                generateSequence(element) { current -> current.parent }
+                    .filterIsInstance<KtDeclaration>()
+            }
+            .distinct()
+            .filter { declaration ->
+                declarationIdentifierRange(declaration)?.let { range ->
+                    offset in range.startOffset..range.endOffset
+                } == true
+            }
+            .minByOrNull { declaration -> declaration.textRange.length }
 
     private fun declarationAt(file: ParsedKotlinFile, offset: Int): KtNamedDeclaration? =
         elementsAround(file, offset)
@@ -220,6 +450,19 @@ internal class KotlinFileNavigationEngine(
                 } == true
             }
             .minByOrNull { it.textRange.length }
+
+    private fun declarationSelectionRange(declaration: PsiElement): TextRange =
+        declarationIdentifierRange(declaration) ?: declaration.textRange
+
+    private fun declarationIdentifierRange(declaration: PsiElement): TextRange? =
+        when (declaration) {
+            is KtSecondaryConstructor -> declaration.getConstructorKeyword().textRange
+            is KtPrimaryConstructor -> declaration.getConstructorKeyword()?.textRange
+                ?: declaration.getContainingClassOrObject().nameIdentifier?.textRange
+            is KtPropertyAccessor -> declaration.namePlaceholder.textRange
+            is KtNamedDeclaration -> declaration.nameIdentifier?.textRange
+            else -> null
+        }
 
     private fun elementsAround(file: ParsedKotlinFile, offset: Int): Sequence<PsiElement> {
         val textLength = file.psi.textLength
@@ -234,16 +477,61 @@ internal class KotlinFileNavigationEngine(
 
     @Synchronized
     private fun parserFor(fileName: String, model: GradleKotlinDslModel): KotlinAstParser {
+        val key = parserKey(fileName, model)
+        pinnedModelParsers[key]?.let { return it.parser }
+        modelParsers[key]?.let { return it }
+        return newParser(key).also { parser ->
+            modelParsers[key] = parser
+            evictModelParsers()
+        }
+    }
+
+    private fun <T> withPinnedParser(
+        fileName: String,
+        model: GradleKotlinDslModel,
+        consume: (KotlinAstParser) -> T,
+    ): T {
+        val key = parserKey(fileName, model)
+        val parser = synchronized(this) {
+            pinnedModelParsers[key]?.let { pinned ->
+                pinned.uses += 1
+                pinned.parser
+            } ?: (modelParsers.remove(key) ?: newParser(key)).also { acquired ->
+                pinnedModelParsers[key] = PinnedParser(acquired, 1)
+            }
+        }
+        return try {
+            consume(parser)
+        } finally {
+            synchronized(this) {
+                val pinned = checkNotNull(pinnedModelParsers[key])
+                pinned.uses -= 1
+                if (pinned.uses == 0) {
+                    pinnedModelParsers.remove(key)
+                    if (closed.get()) {
+                        pinned.parser.close()
+                    } else {
+                        modelParsers[key] = pinned.parser
+                        evictModelParsers()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun parserKey(fileName: String, model: GradleKotlinDslModel): ParserKey {
         val template = KotlinGradleScriptTemplate.forFile(fileName)
-        val key = ParserKey(
+        return ParserKey(
             classPath = model.classPath.map { it.toAbsolutePath().normalize() },
             implicitImports = model.implicitImports,
             baseClassName = template.className,
             implicitReceiverClassName = template.implicitReceiverClassName,
             modelGeneration = model.generation,
         )
-        modelParsers[key]?.let { return it }
-        val parser = KotlinAstParser(
+    }
+
+    private fun newParser(key: ParserKey): KotlinAstParser =
+        KotlinAstParser(
             KotlinScriptAnalysisContext(
                 classPath = key.classPath,
                 implicitImports = key.implicitImports,
@@ -251,13 +539,13 @@ internal class KotlinFileNavigationEngine(
                 implicitReceiverClassName = key.implicitReceiverClassName,
             ),
         )
-        modelParsers[key] = parser
-        if (modelParsers.size > MAXIMUM_MODEL_PARSERS) {
+
+    private fun evictModelParsers() {
+        while (modelParsers.size > MAXIMUM_MODEL_PARSERS) {
             val eldest = modelParsers.entries.iterator().next()
             modelParsers.remove(eldest.key)
             eldest.value.close()
         }
-        return parser
     }
 
     private fun sourceDefinition(
@@ -277,11 +565,47 @@ internal class KotlinFileNavigationEngine(
         if (closed.compareAndSet(false, true)) {
             localParser.close()
             synchronized(this) {
-                modelParsers.values.forEach(KotlinAstParser::close)
+                (modelParsers.values + pinnedModelParsers.values.map(PinnedParser::parser))
+                    .toSet()
+                    .forEach(KotlinAstParser::close)
                 modelParsers.clear()
+                pinnedModelParsers.clear()
             }
         }
     }
+
+    private data class TargetAnalysis(
+        val usesGradleModel: Boolean,
+        val targets: List<SemanticTarget>,
+    )
+
+    private data class SemanticTarget(
+        val descriptor: DeclarationDescriptor,
+        val source: SourceDeclaration?,
+    )
+
+    private data class SourceDeclaration(
+        val uri: String,
+        val role: DeclarationRole,
+        val startOffset: Int,
+        val endOffset: Int,
+        val definition: SourceDefinition,
+    )
+
+    private enum class DeclarationRole {
+        CLASS,
+        CONSTRUCTOR,
+        CALLABLE,
+        VARIABLE,
+        TYPE_ALIAS,
+        TYPE_PARAMETER,
+        OTHER,
+    }
+
+    private data class PinnedParser(
+        val parser: KotlinAstParser,
+        var uses: Int,
+    )
 
     private data class ParserKey(
         val classPath: List<Path>,

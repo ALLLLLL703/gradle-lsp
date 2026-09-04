@@ -11,6 +11,7 @@ import org.eclipse.lsp4j.services.LanguageClientAware
 import org.eclipse.lsp4j.services.LanguageServer
 import org.eclipse.lsp4j.services.TextDocumentService
 import org.eclipse.lsp4j.services.WorkspaceService
+import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -32,6 +33,7 @@ internal class GradleLanguageServer(
         capabilities.setDeclarationProvider(true)
         capabilities.setDefinitionProvider(true)
         capabilities.setTypeDefinitionProvider(true)
+        capabilities.setReferencesProvider(true)
         capabilities.setDocumentSymbolProvider(true)
         capabilities.experimental = mapOf(
             "gradleLsp" to mapOf(
@@ -41,6 +43,19 @@ internal class GradleLanguageServer(
                 ),
             ),
         )
+        val workspaceRoots = params.workspaceFolders
+            ?.map { folder -> folder.uri }
+            .orEmpty()
+            .ifEmpty {
+                listOfNotNull(
+                    params.rootUri
+                        ?: params.rootPath?.let { rootPath ->
+                            Path.of(rootPath).toAbsolutePath().normalize().toUri().toASCIIString()
+                        },
+                )
+            }
+        textDocuments.configureWorkspaceRoots(workspaceRoots)
+
         val documentSymbols = params.capabilities?.textDocument?.documentSymbol
         textDocuments.configureDocumentSymbols(
             hierarchical = documentSymbols?.hierarchicalDocumentSymbolSupport == true,

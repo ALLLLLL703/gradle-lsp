@@ -11,6 +11,7 @@ import org.eclipse.lsp4j.DocumentSymbolParams
 import org.eclipse.lsp4j.Location
 import org.eclipse.lsp4j.LocationLink
 import org.eclipse.lsp4j.PublishDiagnosticsParams
+import org.eclipse.lsp4j.ReferenceParams
 import org.eclipse.lsp4j.SymbolInformation
 import org.eclipse.lsp4j.SymbolKind
 import org.eclipse.lsp4j.TypeDefinitionParams
@@ -24,6 +25,7 @@ import xyz.al.gradlelsp.documents.DocumentSnapshot
 import xyz.al.gradlelsp.documents.DocumentStore
 import xyz.al.gradlelsp.documents.ExternalDocument
 import xyz.al.gradlelsp.documents.ExternalDocumentStore
+import xyz.al.gradlelsp.documents.GradleWorkspaceDocumentSource
 import xyz.al.gradlelsp.navigation.DocumentNavigationEngine
 import xyz.al.gradlelsp.navigation.defaultGradleNavigationEngine
 import xyz.al.gradlelsp.presentation.LspDefinitionMapper
@@ -40,8 +42,12 @@ import java.util.concurrent.TimeUnit
 internal class GradleTextDocumentService(
     private val documents: DocumentStore = DocumentStore(),
     private val externalDocuments: ExternalDocumentStore = ExternalDocumentStore(),
+    private val workspaceDocuments: GradleWorkspaceDocumentSource = GradleWorkspaceDocumentSource(documents),
     private val analyzer: DocumentAnalyzer = defaultGradleAnalysisEngine(),
-    private val navigation: DocumentNavigationEngine = defaultGradleNavigationEngine(externalDocuments),
+    private val navigation: DocumentNavigationEngine = defaultGradleNavigationEngine(
+        externalDocuments,
+        workspaceDocuments,
+    ),
     private val symbolEngine: DocumentSymbolEngine = defaultGradleDocumentSymbolEngine(),
     private val logger: ServerLogger = ServerLogger.standardError(),
     private val analysisExecutor: ExecutorService = newAnalysisExecutor(),
@@ -68,6 +74,10 @@ internal class GradleTextDocumentService(
         hierarchicalDocumentSymbols = hierarchical
         supportedDocumentSymbolKinds = supportedKinds?.toSet()
             ?: LspDocumentSymbolMapper.legacyKinds
+    }
+
+    fun configureWorkspaceRoots(rootUris: List<String>) {
+        workspaceDocuments.configureRoots(rootUris)
     }
 
     override fun didOpen(params: DidOpenTextDocumentParams) {
@@ -145,6 +155,36 @@ internal class GradleTextDocumentService(
                             (failure.message ?: failure::class.java.simpleName),
                     )
                     emptyDefinitions()
+                }
+            },
+            navigationExecutor,
+        )
+
+    override fun references(params: ReferenceParams): CompletableFuture<List<Location>> =
+        CompletableFuture.supplyAsync(
+            {
+                try {
+                    val snapshot = documents.current(params.textDocument.uri)
+                        ?: return@supplyAsync emptyList()
+                    val workspaceRevision = documents.revision()
+                    val offset = Utf16LineMap(snapshot.text).offsetAt(params.position)
+                        ?: return@supplyAsync emptyList()
+                    val references = navigation.references(
+                        AnalysisDocument(snapshot.uri, snapshot.fileName, snapshot.text),
+                        offset,
+                        params.context.isIncludeDeclaration,
+                    )
+                    if (!documents.isCurrent(snapshot) || documents.revision() != workspaceRevision) {
+                        return@supplyAsync emptyList()
+                    }
+
+                    references.map(LspDefinitionMapper::map)
+                } catch (failure: Exception) {
+                    logger.log(
+                        "gradle-lsp: references failed for ${params.textDocument.uri}: " +
+                            (failure.message ?: failure::class.java.simpleName),
+                    )
+                    emptyList()
                 }
             },
             navigationExecutor,

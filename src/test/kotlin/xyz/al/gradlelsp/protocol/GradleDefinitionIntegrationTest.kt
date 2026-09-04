@@ -7,10 +7,13 @@ import org.eclipse.lsp4j.DocumentSymbolCapabilities
 import org.eclipse.lsp4j.DocumentSymbolParams
 import org.eclipse.lsp4j.InitializeParams
 import org.eclipse.lsp4j.Position
+import org.eclipse.lsp4j.ReferenceContext
+import org.eclipse.lsp4j.ReferenceParams
 import org.eclipse.lsp4j.SymbolKind
 import org.eclipse.lsp4j.TextDocumentClientCapabilities
 import org.eclipse.lsp4j.TextDocumentIdentifier
 import org.eclipse.lsp4j.TypeDefinitionParams
+import org.eclipse.lsp4j.WorkspaceFolder
 import org.eclipse.lsp4j.jsonrpc.services.ServiceEndpoints
 import xyz.al.gradlelsp.analysis.AnalysisDocument
 import xyz.al.gradlelsp.analysis.DocumentAnalyzer
@@ -19,6 +22,7 @@ import xyz.al.gradlelsp.documents.DocumentStore
 import xyz.al.gradlelsp.documents.ExternalDocumentStore
 import xyz.al.gradlelsp.navigation.DocumentNavigationEngine
 import xyz.al.gradlelsp.navigation.SourceDefinition
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -147,6 +151,133 @@ class GradleDefinitionIntegrationTest {
             assertEquals(SymbolKind.Object, flat.map { it.left }.single { it.name == "Registry" }.kind)
             assertEquals(SymbolKind.EnumMember, flat.map { it.left }.single { it.name == "FAST" }.kind)
             assertTrue(flat.map { it.left }.none { it.name == "local" })
+        }
+    }
+
+    @Test
+    fun `references stream workspace scripts use open overlays and preserve constructor overloads`() {
+        val project = Files.createTempDirectory("gradle-lsp-references")
+        try {
+            val settings = project.resolve("settings.gradle.kts")
+            val script = project.resolve("build.gradle.kts")
+            val overlayScript = project.resolve("overlay.gradle.kts")
+            val diskScript = project.resolve("disk.gradle.kts")
+            Files.writeString(settings, "rootProject.name = \"fixture\"\n")
+            val text = """
+                class Box {
+                    constructor(value: Int) { println(value) }
+                    constructor(value: CharSequence) { println(value) }
+                }
+                val broken =
+                val marker = "😀"; val current: String = "current"
+                val first = Box(1)
+                val recovered = Box(2)
+                val other = Box("x")
+            """.trimIndent()
+            Files.writeString(script, text)
+            Files.writeString(overlayScript, "val stale: Int = 1\n")
+            Files.writeString(diskScript, "val fromDisk: String = \"disk\"\n")
+
+            val documents = DocumentStore().apply {
+                open(script.toUri().toString(), 1, text)
+                open(overlayScript.toUri().toString(), 1, "val fromOverlay: String = \"open\"\n")
+            }
+            val textDocuments = GradleTextDocumentService(documents = documents, analyzer = noAnalysis())
+            val initialize = InitializeParams().apply {
+                workspaceFolders = listOf(WorkspaceFolder(project.toUri().toString(), "fixture"))
+            }
+
+            GradleLanguageServer(textDocuments = textDocuments).use { server ->
+                val capabilities = server.initialize(initialize).join().capabilities
+                assertTrue(capabilities.referencesProvider.left)
+
+                val stringReferences = textDocuments.references(
+                    ReferenceParams(
+                        TextDocumentIdentifier(script.toUri().toString()),
+                        Position(5, 33),
+                        ReferenceContext(false),
+                    ),
+                ).join()
+                assertEquals(
+                    setOf(script.toUri().toString(), overlayScript.toUri().toString(), diskScript.toUri().toString()),
+                    stringReferences.map { location -> location.uri }.toSet(),
+                )
+                assertEquals(3, stringReferences.size)
+                assertEquals(
+                    Position(5, 32),
+                    stringReferences.single { location -> location.uri == script.toUri().toString() }.range.start,
+                )
+                assertEquals(
+                    Position(0, 17),
+                    stringReferences.single { location -> location.uri == overlayScript.toUri().toString() }.range.start,
+                )
+
+                val constructorParams = ReferenceParams(
+                    TextDocumentIdentifier(script.toUri().toString()),
+                    Position(1, 8),
+                    ReferenceContext(false),
+                )
+                val calls = textDocuments.references(constructorParams).join()
+                assertEquals(
+                    listOf(Position(6, 12), Position(7, 16)),
+                    calls.map { location -> location.range.start },
+                )
+
+                constructorParams.context = ReferenceContext(true)
+                val callsAndDeclaration = textDocuments.references(constructorParams).join()
+                assertEquals(listOf(1, 6, 7), callsAndDeclaration.map { location -> location.range.start.line })
+                assertEquals(Position(1, 4), callsAndDeclaration.first().range.start)
+                assertEquals(Position(1, 15), callsAndDeclaration.first().range.end)
+            }
+        } finally {
+            project.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `workspace references are discarded when an open candidate changes`() {
+        val target = Path.of("build.gradle.kts").toAbsolutePath().normalize()
+        val candidate = Path.of("settings.gradle.kts").toAbsolutePath().normalize()
+        val targetText = "val answer = 42\nanswer\n"
+        val candidateText = "val copy = answer\n"
+        val documents = DocumentStore().apply {
+            open(target.toUri().toString(), 1, targetText)
+            open(candidate.toUri().toString(), 1, candidateText)
+        }
+        val enteredNavigation = CountDownLatch(1)
+        val continueNavigation = CountDownLatch(1)
+        val navigation = object : DocumentNavigationEngine {
+            override fun definitions(document: AnalysisDocument, offset: Int): List<SourceDefinition> = emptyList()
+
+            override fun references(
+                document: AnalysisDocument,
+                offset: Int,
+                includeDeclaration: Boolean,
+            ): List<SourceDefinition> {
+                enteredNavigation.countDown()
+                check(continueNavigation.await(5, TimeUnit.SECONDS))
+                return listOf(SourceDefinition(candidate.toUri().toString(), candidateText, 11, 17))
+            }
+        }
+        val textDocuments = GradleTextDocumentService(
+            documents = documents,
+            analyzer = noAnalysis(),
+            navigation = navigation,
+        )
+
+        textDocuments.use {
+            val response = textDocuments.references(
+                ReferenceParams(
+                    TextDocumentIdentifier(target.toUri().toString()),
+                    Position(1, 1),
+                    ReferenceContext(false),
+                ),
+            )
+            assertTrue(enteredNavigation.await(5, TimeUnit.SECONDS))
+            documents.replace(candidate.toUri().toString(), 2, "val copy = 0\n")
+            continueNavigation.countDown()
+
+            assertTrue(response.join().isEmpty())
         }
     }
 
