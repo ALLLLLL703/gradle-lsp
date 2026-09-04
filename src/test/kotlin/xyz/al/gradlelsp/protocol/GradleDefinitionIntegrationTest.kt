@@ -379,6 +379,40 @@ class GradleDefinitionIntegrationTest {
     }
 
     @Test
+    fun `workspace navigation falls back for an open script outside configured roots`() {
+        val configuredRoot = Files.createTempDirectory("gradle-lsp-configured-root")
+        val outsideRoot = Files.createTempDirectory("gradle-lsp-outside-root")
+        try {
+            Files.writeString(configuredRoot.resolve("settings.gradle.kts"), "rootProject.name = \"configured\"\n")
+            Files.writeString(outsideRoot.resolve("settings.gradle.kts"), "rootProject.name = \"outside\"\n")
+            val script = outsideRoot.resolve("build.gradle.kts")
+            val text = "val target = 1\nval broken =\ntarget\n"
+            Files.writeString(script, text)
+            val documents = DocumentStore().apply { open(script.toUri().toString(), 1, text) }
+            val textDocuments = GradleTextDocumentService(documents = documents, analyzer = noAnalysis())
+            val initialize = InitializeParams().apply {
+                workspaceFolders = listOf(WorkspaceFolder(configuredRoot.toUri().toString(), "configured"))
+            }
+
+            GradleLanguageServer(textDocuments = textDocuments).use { server ->
+                server.initialize(initialize).join()
+                val locations = textDocuments.references(
+                    ReferenceParams(
+                        TextDocumentIdentifier(script.toUri().toString()),
+                        Position(0, 5),
+                        ReferenceContext(true),
+                    ),
+                ).join()
+
+                assertEquals(listOf(0, 2), locations.map { location -> location.range.start.line })
+            }
+        } finally {
+            configuredRoot.toFile().deleteRecursively()
+            outsideRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `workspace references are discarded when an open candidate changes`() {
         val target = Path.of("build.gradle.kts").toAbsolutePath().normalize()
         val candidate = Path.of("settings.gradle.kts").toAbsolutePath().normalize()

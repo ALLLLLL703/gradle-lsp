@@ -35,8 +35,10 @@ internal class GradleWorkspaceDocumentSource(
 
     override fun forEachDocument(origin: AnalysisDocument, consume: (AnalysisDocument) -> Unit) {
         val originPath = filePath(origin.uri) ?: return
-        val roots = configuredRoots.takeIf { roots -> roots.isNotEmpty() }
-            ?: listOf(GradleProjectRootLocator.findFor(originPath))
+        val configured = configuredRoots
+        val roots = configured.takeIf { roots ->
+            roots.isNotEmpty() && roots.any(originPath::startsWith)
+        } ?: listOf(GradleProjectRootLocator.findFor(originPath))
         val openByPath = openDocuments.currentSnapshots()
             .asSequence()
             .filter { snapshot -> snapshot.fileName.endsWith(KOTLIN_GRADLE_SUFFIX) }
