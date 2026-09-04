@@ -68,6 +68,18 @@ function notify(method, params) {
   send({ method, params });
 }
 
+async function withTimeout(promise, timeoutMs, description) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${description} timed out after ${timeoutMs} ms`)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function positionOf(needle, occurrence = 1) {
   let offset = -1;
   for (let index = 0; index < occurrence; index += 1) {
@@ -106,6 +118,23 @@ try {
   ]);
   await request("textDocument/documentSymbol", { textDocument: { uri: scriptUri } });
   await request("textDocument/definition", withDocument(positionOf("kotlinStdlibSources", 2)));
+
+  const externalDefinitionDurationsMs = [];
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const startedAt = performance.now();
+    const externalDefinition = await withTimeout(
+      request("textDocument/definition", withDocument(positionOf("implementation("))),
+      30_000,
+      `Gradle implementation definition attempt ${attempt}`,
+    );
+    externalDefinitionDurationsMs.push(Math.round(performance.now() - startedAt));
+    const hasExternalDefinition = Array.isArray(externalDefinition) && externalDefinition.some((location) => {
+      const uri = location.uri ?? location.targetUri;
+      return typeof uri === "string" && uri.startsWith("gradle-lsp://source/");
+    });
+    if (!hasExternalDefinition) throw new Error("Gradle implementation did not resolve to external source");
+  }
+
   await request("textDocument/declaration", withDocument(positionOf("kotlinStdlibSources", 2)));
   await request("textDocument/typeDefinition", withDocument(positionOf("configurations")));
   await request("textDocument/references", {
@@ -120,7 +149,13 @@ try {
   const threads = Number(/^Threads:\s+(\d+)$/m.exec(processStatus)?.[1]);
   if (!Number.isFinite(peakRssKiB)) throw new Error("VmHWM is unavailable; this check requires Linux /proc");
 
-  console.log(JSON.stringify({ currentRssKiB, peakRssKiB, threads, maximumRssKiB }));
+  console.log(JSON.stringify({
+    currentRssKiB,
+    peakRssKiB,
+    threads,
+    maximumRssKiB,
+    externalDefinitionDurationsMs,
+  }));
   if (peakRssKiB >= maximumRssKiB) {
     throw new Error(`Peak RSS ${peakRssKiB} KiB exceeded ${maximumRssKiB} KiB`);
   }

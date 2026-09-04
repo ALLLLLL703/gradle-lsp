@@ -17,6 +17,7 @@ import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
 import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtDeclaration
+import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtNamedDeclaration
 import org.jetbrains.kotlin.psi.KtPrimaryConstructor
 import org.jetbrains.kotlin.psi.KtSecondaryConstructor
@@ -78,7 +79,8 @@ internal class KotlinExternalSourceResolver(
     ): SourceDefinition? = runCatching {
         val parsed = parser.parse(unit.fileName, unit.text)
         if (parsed.psi.packageFqName.asString() != packageName) return@runCatching null
-        val candidates = PsiTreeUtil.collectElementsOfType(parsed.psi, KtDeclaration::class.java)
+        val candidates = kotlinCandidates(parsed.psi, target)
+        if (candidates.isEmpty()) return@runCatching null
         val context = parser.bindingContext(parsed)
         val declaration = candidates.firstNotNullOfOrNull { candidate ->
             val descriptor = candidateDescriptor(candidate, target.kind, context)
@@ -90,6 +92,29 @@ internal class KotlinExternalSourceResolver(
         } ?: return@runCatching null
         sourceDefinition(unit, declaration.second)
     }.getOrNull()
+
+    private fun kotlinCandidates(
+        file: KtFile,
+        target: CompilerDeclarationIdentity,
+    ): List<KtDeclaration> {
+        val declarationName = target.fqName.substringAfterLast('.')
+        return PsiTreeUtil.collectElementsOfType(file, KtDeclaration::class.java)
+            .filter { candidate ->
+                if (target.kind == CompilerDeclarationIdentity.Kind.CONSTRUCTOR) {
+                    candidate.constructorOwnerName() == declarationName
+                } else {
+                    candidate is KtNamedDeclaration && candidate.name == declarationName
+                }
+            }
+    }
+
+    private fun KtDeclaration.constructorOwnerName(): String? =
+        when (this) {
+            is KtPrimaryConstructor -> getContainingClassOrObject().name
+            is KtSecondaryConstructor -> getContainingClassOrObject().name
+            is KtClassOrObject -> name
+            else -> null
+        }
 
     private fun candidateDescriptor(
         candidate: KtDeclaration,
