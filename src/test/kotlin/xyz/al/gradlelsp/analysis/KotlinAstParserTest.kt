@@ -1,18 +1,15 @@
 package xyz.al.gradlelsp.analysis
 
+import org.jetbrains.kotlin.com.intellij.psi.util.PsiTreeUtil
 import org.jetbrains.kotlin.psi.KtNamedFunction
 import org.jetbrains.kotlin.psi.KtProperty
 import xyz.al.gradlelsp.gradle.GradleKotlinDslModelLoader
 import xyz.al.gradlelsp.navigation.KotlinFileNavigationEngine
-import xyz.al.gradlelsp.navigation.KotlinStubDeclarationKind
-import xyz.al.gradlelsp.navigation.KotlinStubDeclarationLocator
-import xyz.al.gradlelsp.navigation.KotlinStubDeclarationTarget
 import java.net.JarURLConnection
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class KotlinAstParserTest {
@@ -146,31 +143,29 @@ class KotlinAstParserTest {
     }
 
     @Test
-    fun `metadata stub locator selects a callable instead of its same-named parameter`() {
+    fun `metadata stub selects a callable instead of its same-named parameter`() {
+        val script = Path.of("build.gradle.kts").toAbsolutePath()
+        val model = GradleKotlinDslModelLoader().modelFor(script).copy(sourcePath = emptyList())
         val text = """
-            package fixture
-
-            abstract class Owner {
-                abstract fun update(): kotlin.String
-                abstract fun update(update: kotlin.String): kotlin.String
-            }
+            val broken =
+            val recovered = listOf(1, 2)
+            val selected = recovered.random(kotlin.random.Random.Default)
         """.trimIndent()
-        KotlinAstParser().use { parser ->
-            val parsed = parser.parse("update.decompiled.kt", text)
-            val target = KotlinStubDeclarationTarget(
-                name = "update",
-                kind = KotlinStubDeclarationKind.FUNCTION,
-                containerNames = listOf("Owner"),
-                typeParameterCount = 0,
-                valueParameterCount = 1,
-                hasExtensionReceiver = false,
-            )
-            val declaration = KotlinStubDeclarationLocator.find(parsed.psi, target)
-            val function = assertIs<KtNamedFunction>(declaration)
-            val expectedStart = text.indexOf("update(update")
+        val document = AnalysisDocument(script.toUri().toString(), script.fileName.toString(), text)
 
-            assertEquals(expectedStart, function.nameIdentifier?.textRange?.startOffset)
-            assertEquals(1, function.valueParameters.size)
+        KotlinFileNavigationEngine(modelProvider = { model }).use { navigation ->
+            val reference = text.indexOf("random")
+            val definition = navigation.definitions(document, reference).single()
+            KotlinAstParser().use { parser ->
+                val parsedStub = parser.parse("random.decompiled.kt", definition.sourceText)
+                val function = PsiTreeUtil.collectElementsOfType(parsedStub.psi, KtNamedFunction::class.java)
+                    .single { declaration -> declaration.name == "random" }
+                val parameter = function.valueParameters.single()
+
+                assertEquals(function.nameIdentifier?.textRange?.startOffset, definition.startOffset)
+                assertEquals("random", definition.sourceText.substring(definition.startOffset, definition.endOffset))
+                assertTrue(definition.startOffset < requireNotNull(parameter.nameIdentifier).textRange.startOffset)
+            }
         }
     }
 
