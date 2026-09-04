@@ -60,4 +60,4 @@ internal class GradleAnalysisEngine(
 }
 
 internal fun defaultGradleAnalysisEngine(): GradleAnalysisEngine =
-    GradleAnalysisEngine().use(GradleDsl.KOTLIN, KotlinAstAnalyzer())
+    GradleAnalysisEngine().use(GradleDsl.KOTLIN, KotlinGradleDslAnalyzer())

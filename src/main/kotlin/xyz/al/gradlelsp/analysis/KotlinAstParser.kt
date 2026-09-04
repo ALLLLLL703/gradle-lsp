@@ -4,6 +4,7 @@ import org.jetbrains.kotlin.cli.jvm.compiler.EnvironmentConfigFiles
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment
 import org.jetbrains.kotlin.com.intellij.openapi.util.Disposer
 import org.jetbrains.kotlin.com.intellij.psi.PsiErrorElement
+import org.jetbrains.kotlin.com.intellij.psi.PsiWhiteSpace
 import org.jetbrains.kotlin.com.intellij.psi.util.PsiTreeUtil
 import org.jetbrains.kotlin.config.CompilerConfiguration
 import org.jetbrains.kotlin.psi.KtFile
@@ -25,6 +26,20 @@ internal class ParsedKotlinFile internal constructor(
                     source = "kotlin-psi",
                 )
             }
+
+    fun diagnosticRangeAt(offset: Int): Pair<Int, Int> {
+        if (psi.textLength == 0) return 0 to 0
+
+        val boundedOffset = offset.coerceIn(0, psi.textLength - 1)
+        val elementAtOffset = psi.findElementAt(boundedOffset)
+        val diagnosticElement = if (elementAtOffset is PsiWhiteSpace) {
+            PsiTreeUtil.nextLeaf(elementAtOffset, true) ?: elementAtOffset
+        } else {
+            elementAtOffset
+        }
+        val range = diagnosticElement?.textRange ?: return offset to offset
+        return range.startOffset to range.endOffset
+    }
 }
 
 internal class KotlinAstParser : AutoCloseable {
@@ -50,11 +65,30 @@ internal class KotlinAstParser : AutoCloseable {
     }
 }
 
-internal class KotlinAstAnalyzer(
+internal class KotlinGradleDslAnalyzer(
     private val parser: KotlinAstParser = KotlinAstParser(),
+    private val semanticAnalyzer: KotlinCompilerSemanticAnalyzer = KotlinCompilerSemanticAnalyzer(),
 ) : DocumentAnalyzer {
-    override fun analyze(document: AnalysisDocument): List<SourceDiagnostic> =
-        parser.parse(document.fileName, document.text).syntaxDiagnostics()
+    override fun analyze(document: AnalysisDocument): List<SourceDiagnostic> {
+        val parsedFile = parser.parse(document.fileName, document.text)
+        val syntaxDiagnostics = parsedFile.syntaxDiagnostics()
+        val semanticDiagnostics = runCatching {
+            semanticAnalyzer.analyze(document, parsedFile, syntaxDiagnostics)
+        }.getOrElse { failure ->
+            listOf(
+                SourceDiagnostic(
+                    startOffset = 0,
+                    endOffset = 0,
+                    message = "Gradle semantic analysis is unavailable: " +
+                        (failure.message ?: failure::class.java.simpleName),
+                    severity = SourceDiagnosticSeverity.WARNING,
+                    kind = SourceDiagnosticKind.SEMANTIC,
+                    source = "gradle-model",
+                ),
+            )
+        }
+        return syntaxDiagnostics + semanticDiagnostics
+    }
 
     override fun close() = parser.close()
 }
