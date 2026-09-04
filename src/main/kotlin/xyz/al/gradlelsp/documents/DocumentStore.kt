@@ -27,6 +27,8 @@ internal class DocumentStore {
 
     fun close(uri: String): DocumentSnapshot? = snapshots.remove(uri)
 
+    fun current(uri: String): DocumentSnapshot? = snapshots[uri]
+
     fun isCurrent(snapshot: DocumentSnapshot): Boolean = snapshots[snapshot.uri] == snapshot
 
     private fun fileName(uri: String): String =

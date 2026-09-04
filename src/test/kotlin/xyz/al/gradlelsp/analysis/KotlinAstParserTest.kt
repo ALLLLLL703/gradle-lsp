@@ -1,6 +1,7 @@
 package xyz.al.gradlelsp.analysis
 
 import org.jetbrains.kotlin.psi.KtProperty
+import xyz.al.gradlelsp.navigation.KotlinFileNavigationEngine
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -31,6 +32,44 @@ class KotlinAstParserTest {
                 .filterIsInstance<KtProperty>()
                 .mapNotNull(KtProperty::getName)
             assertEquals(listOf("broken", "recovered"), recoveredNames)
+        }
+    }
+
+    @Test
+    fun `file navigation resolves recovered declarations and lexical shadowing`() {
+        val text = """
+            val answer = 42
+            fun twice(value: Int): Int = value * 2
+            val broken =
+            val topLevelUse = answer
+            val functionUse = twice(answer)
+            fun scope() {
+                val answer = 7
+                println(answer)
+            }
+        """.trimIndent()
+        val script = Path.of("build.gradle.kts").toAbsolutePath().normalize()
+        val document = AnalysisDocument(script.toUri().toString(), script.fileName.toString(), text)
+
+        KotlinFileNavigationEngine().use { navigation ->
+            fun definitionOffset(referenceOffset: Int): Int =
+                navigation.definitions(document, referenceOffset + 1).single().startOffset
+
+            val topLevelDeclaration = text.indexOf("answer")
+            val topLevelReference = text.indexOf("answer", text.indexOf("topLevelUse"))
+            assertEquals(topLevelDeclaration, definitionOffset(topLevelReference))
+
+            val functionDeclaration = text.indexOf("twice")
+            val functionReference = text.indexOf("twice", text.indexOf("functionUse"))
+            assertEquals(functionDeclaration, definitionOffset(functionReference))
+
+            val parameterDeclaration = text.indexOf("value")
+            val parameterReference = text.indexOf("value", parameterDeclaration + "value".length)
+            assertEquals(parameterDeclaration, definitionOffset(parameterReference))
+
+            val localDeclaration = text.indexOf("answer", text.indexOf("fun scope"))
+            val localReference = text.indexOf("answer", localDeclaration + "answer".length)
+            assertEquals(localDeclaration, definitionOffset(localReference))
         }
     }
 

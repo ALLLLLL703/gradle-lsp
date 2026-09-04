@@ -28,6 +28,7 @@ internal class GradleLanguageServer(
     override fun initialize(params: InitializeParams): CompletableFuture<InitializeResult> {
         val capabilities = ServerCapabilities()
         capabilities.setTextDocumentSync(TextDocumentSyncKind.Full)
+        capabilities.setDefinitionProvider(true)
 
         val result = InitializeResult(capabilities)
         result.serverInfo = ServerInfo("Gradle LSP", "0.1.0-SNAPSHOT")
