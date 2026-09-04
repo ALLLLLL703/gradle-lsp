@@ -1,13 +1,18 @@
 package xyz.al.gradlelsp.analysis
 
+import org.jetbrains.kotlin.psi.KtNamedFunction
 import org.jetbrains.kotlin.psi.KtProperty
 import xyz.al.gradlelsp.gradle.GradleKotlinDslModelLoader
 import xyz.al.gradlelsp.navigation.KotlinFileNavigationEngine
+import xyz.al.gradlelsp.navigation.KotlinStubDeclarationKind
+import xyz.al.gradlelsp.navigation.KotlinStubDeclarationLocator
+import xyz.al.gradlelsp.navigation.KotlinStubDeclarationTarget
 import java.net.JarURLConnection
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class KotlinAstParserTest {
@@ -137,6 +142,35 @@ class KotlinAstParserTest {
             )
             assertTrue(method.sourceText.contains("class `KotlinProjectScriptTemplate`"))
             assertTrue(method.sourceText.contains("fun getBuildscript"))
+        }
+    }
+
+    @Test
+    fun `metadata stub locator selects a callable instead of its same-named parameter`() {
+        val text = """
+            package fixture
+
+            abstract class Owner {
+                abstract fun update(): kotlin.String
+                abstract fun update(update: kotlin.String): kotlin.String
+            }
+        """.trimIndent()
+        KotlinAstParser().use { parser ->
+            val parsed = parser.parse("update.decompiled.kt", text)
+            val target = KotlinStubDeclarationTarget(
+                name = "update",
+                kind = KotlinStubDeclarationKind.FUNCTION,
+                containerNames = listOf("Owner"),
+                typeParameterCount = 0,
+                valueParameterCount = 1,
+                hasExtensionReceiver = false,
+            )
+            val declaration = KotlinStubDeclarationLocator.find(parsed.psi, target)
+            val function = assertIs<KtNamedFunction>(declaration)
+            val expectedStart = text.indexOf("update(update")
+
+            assertEquals(expectedStart, function.nameIdentifier?.textRange?.startOffset)
+            assertEquals(1, function.valueParameters.size)
         }
     }
 
