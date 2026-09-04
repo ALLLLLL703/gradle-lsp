@@ -74,7 +74,7 @@ internal class KotlinDescriptorStubDecompiler(
     }
 
     private fun renderWithContainers(descriptor: DeclarationDescriptor): String {
-        var rendered = DescriptorRenderer.FQ_NAMES_IN_TYPES.render(descriptor)
+        var rendered = STUB_RENDERER.render(descriptor)
         val containers = generateSequence(descriptor.containingDeclaration) { declaration ->
             declaration.containingDeclaration
         }.filterIsInstance<ClassDescriptor>().toList()
@@ -86,8 +86,14 @@ internal class KotlinDescriptorStubDecompiler(
                 ClassKind.ANNOTATION_CLASS -> "annotation class"
                 else -> "class"
             }
+            val typeParameters = container.declaredTypeParameters
+                .joinToString(prefix = "<", postfix = ">") { parameter ->
+                    "`${parameter.name.asString()}`"
+                }
+                .takeUnless { parameters -> parameters == "<>" }
+                .orEmpty()
             val indented = rendered.lineSequence().joinToString("\n") { line -> "    $line" }
-            rendered = "$keyword `${container.name.asString()}` {\n$indented\n}"
+            rendered = "$keyword `${container.name.asString()}`$typeParameters {\n$indented\n}"
         }
         return rendered
     }
@@ -113,6 +119,14 @@ internal class KotlinDescriptorStubDecompiler(
             descriptor.toString()
         } else {
             null
+        }
+    }
+
+    private companion object {
+        val STUB_RENDERER = DescriptorRenderer.FQ_NAMES_IN_TYPES.withOptions {
+            withDefinedIn = false
+            secondaryConstructorsAsPrimary = false
+            renderConstructorKeyword = true
         }
     }
 }

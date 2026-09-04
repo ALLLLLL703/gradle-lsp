@@ -171,6 +171,31 @@ class KotlinAstParserTest {
     }
 
     @Test
+    fun `metadata stub preserves a generic Kotlin constructor`() {
+        val script = Path.of("build.gradle.kts").toAbsolutePath()
+        val model = GradleKotlinDslModelLoader().modelFor(script).copy(sourcePath = emptyList())
+        val text = """
+            val broken =
+            val pair = Pair(1, "value")
+        """.trimIndent()
+        val document = AnalysisDocument(script.toUri().toString(), script.fileName.toString(), text)
+
+        KotlinFileNavigationEngine(modelProvider = { model }).use { navigation ->
+            val definition = navigation.definitions(document, text.indexOf("Pair")).single()
+
+            assertTrue(
+                definition.uri.endsWith("/Pair.decompiled.kt"),
+                "${definition.uri}\n${definition.sourceText}",
+            )
+            assertEquals(
+                "constructor",
+                definition.sourceText.substring(definition.startOffset, definition.endOffset),
+            )
+            assertTrue(definition.sourceText.contains("class `Pair`<`A`, `B`>"))
+        }
+    }
+
+    @Test
     fun `metadata stub selects a callable instead of its same-named parameter`() {
         val script = Path.of("build.gradle.kts").toAbsolutePath()
         val model = GradleKotlinDslModelLoader().modelFor(script).copy(sourcePath = emptyList())
