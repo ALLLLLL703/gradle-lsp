@@ -27,6 +27,14 @@
 - Keep request handlers non-blocking; compiler and Gradle work must run outside the LSP message-reader thread.
 - Publish diagnostics only for the latest known document version; stale analysis must never overwrite newer results.
 
+## Memory budget
+
+- Design the language-server process to remain below 1 GiB resident memory during normal Gradle Kotlin DSL workloads.
+- Keep compiler environments, Gradle models, source archives, external documents, and workspace indexes in explicitly bounded caches; close disposable compiler resources on eviction.
+- Prefer lazy, streaming, and project-scoped indexing over eagerly materializing dependency or workspace contents.
+- Ship conservative JVM heap, metaspace, direct-memory, code-cache, and thread-stack limits. Treat the 1 GiB process budget as a target rather than an OS-enforced guarantee, and fail gracefully when analysis must be degraded.
+- Validate memory-sensitive additions with an executable representative scenario and record peak RSS when practical.
+
 ## Tests and debugging
 
 - Validate every feature and bug fix with an executable scenario before considering it complete.
