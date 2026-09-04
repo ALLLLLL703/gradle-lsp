@@ -264,6 +264,9 @@ class GradleDefinitionIntegrationTest {
                 class PropertyBox(val payload: Int) { fun copy() = payload }
                 val propertyBox = PropertyBox(1)
                 propertyBox.payload
+                class Meter(val amount: Int) { operator fun plus(other: Meter) = Meter(amount + other.amount) }
+                val left = Meter(1)
+                val total = left + Meter(2)
             """.trimIndent()
             Files.writeString(script, text)
             Files.writeString(overlayScript, "val stale: Int = 1\n")
@@ -352,6 +355,22 @@ class GradleDefinitionIntegrationTest {
                     listOf(Position(14, 51), Position(16, 12)),
                     constructorPropertyReferences.map { location -> location.range.start },
                 )
+
+                val plusDeclaration = Position(17, text.lines()[17].indexOf("plus") + 1)
+                val plusOperator = Position(19, text.lines()[19].indexOf("+"))
+                val operatorDefinition = textDocuments.definition(
+                    DefinitionParams(TextDocumentIdentifier(script.toUri().toString()), plusOperator),
+                ).join().left.single()
+                assertEquals(Position(17, text.lines()[17].indexOf("plus")), operatorDefinition.range.start)
+
+                val operatorReferences = textDocuments.references(
+                    ReferenceParams(
+                        TextDocumentIdentifier(script.toUri().toString()),
+                        plusDeclaration,
+                        ReferenceContext(false),
+                    ),
+                ).join()
+                assertEquals(listOf(plusOperator), operatorReferences.map { location -> location.range.start })
             }
         } finally {
             project.toFile().deleteRecursively()

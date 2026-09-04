@@ -19,7 +19,7 @@ import org.jetbrains.kotlin.descriptors.VariableDescriptor
 import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtDeclaration
 import org.jetbrains.kotlin.psi.KtExpression
-import org.jetbrains.kotlin.psi.KtNameReferenceExpression
+import org.jetbrains.kotlin.psi.KtSimpleNameExpression
 import org.jetbrains.kotlin.psi.KtNamedDeclaration
 import org.jetbrains.kotlin.psi.KtParameter
 import org.jetbrains.kotlin.psi.KtPrimaryConstructor
@@ -131,7 +131,7 @@ internal class KotlinFileNavigationEngine(
                     analyzeWorkspaceDocument(candidateDocument, analysis.usesGradleModel) { parsedFile, context ->
                         PsiTreeUtil.collectElementsOfType(
                             parsedFile.psi,
-                            KtNameReferenceExpression::class.java,
+                            KtSimpleNameExpression::class.java,
                         ).forEach { reference ->
                             val matches = referenceDescriptors(context, reference)
                                 .flatMap { descriptor ->
@@ -543,13 +543,13 @@ internal class KotlinFileNavigationEngine(
     private fun resolveDescriptors(
         parser: KotlinAstParser,
         file: ParsedKotlinFile,
-        reference: KtNameReferenceExpression,
+        reference: KtSimpleNameExpression,
     ): List<DeclarationDescriptor> =
         referenceDescriptors(parser.bindingContext(file), reference)
 
     private fun referenceDescriptors(
         context: BindingContext,
-        reference: KtNameReferenceExpression,
+        reference: KtSimpleNameExpression,
     ): List<DeclarationDescriptor> {
         val constructor = reference.getResolvedCall(context)?.resultingDescriptor as? ConstructorDescriptor
         val direct = context[BindingContext.REFERENCE_TARGET, reference]
@@ -561,10 +561,10 @@ internal class KotlinFileNavigationEngine(
             .distinctBy { descriptor -> descriptor.original }
     }
 
-    private fun referenceAt(file: ParsedKotlinFile, offset: Int): KtNameReferenceExpression? =
+    private fun referenceAt(file: ParsedKotlinFile, offset: Int): KtSimpleNameExpression? =
         elementsAround(file, offset)
             .mapNotNull { element ->
-                PsiTreeUtil.getParentOfType(element, KtNameReferenceExpression::class.java, false)
+                PsiTreeUtil.getParentOfType(element, KtSimpleNameExpression::class.java, false)
             }
             .filter { containsOffset(it, offset) }
             .minByOrNull { it.textRange.length }
@@ -618,7 +618,7 @@ internal class KotlinFileNavigationEngine(
             .mapNotNull(file.psi::findElementAt)
     }
 
-    private fun containsOffset(reference: KtNameReferenceExpression, offset: Int): Boolean =
+    private fun containsOffset(reference: KtSimpleNameExpression, offset: Int): Boolean =
         offset in reference.textRange.startOffset..reference.textRange.endOffset
 
     @Synchronized
