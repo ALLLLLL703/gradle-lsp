@@ -10,6 +10,7 @@ import org.eclipse.lsp4j.Position
 import org.eclipse.lsp4j.SymbolKind
 import org.eclipse.lsp4j.TextDocumentClientCapabilities
 import org.eclipse.lsp4j.TextDocumentIdentifier
+import org.eclipse.lsp4j.TypeDefinitionParams
 import org.eclipse.lsp4j.jsonrpc.services.ServiceEndpoints
 import xyz.al.gradlelsp.analysis.AnalysisDocument
 import xyz.al.gradlelsp.analysis.DocumentAnalyzer
@@ -184,9 +185,10 @@ class GradleDefinitionIntegrationTest {
     }
 
     @Test
-    fun `definition and declaration resolve a recovered local symbol from an LSP UTF-16 position`() {
+    fun `definition declaration and type definition resolve recovered symbols from UTF-16 positions`() {
         val text = """
-            val answer = 42
+            class Answer
+            val answer = Answer()
             val broken =
             val marker = "😀"; answer
         """.trimIndent()
@@ -199,18 +201,25 @@ class GradleDefinitionIntegrationTest {
             val capabilities = server.initialize(InitializeParams()).join().capabilities
             assertTrue(capabilities.declarationProvider.left)
             assertTrue(capabilities.definitionProvider.left)
+            assertTrue(capabilities.typeDefinitionProvider.left)
 
+            val position = Position(3, 19)
             val definition = textDocuments.definition(
-                DefinitionParams(TextDocumentIdentifier(uri), Position(2, 19)),
+                DefinitionParams(TextDocumentIdentifier(uri), position),
             ).join().left.single()
             val declaration = textDocuments.declaration(
-                DeclarationParams(TextDocumentIdentifier(uri), Position(2, 19)),
+                DeclarationParams(TextDocumentIdentifier(uri), position),
+            ).join().left.single()
+            val typeDefinition = textDocuments.typeDefinition(
+                TypeDefinitionParams(TextDocumentIdentifier(uri), position),
             ).join().left.single()
 
             assertEquals(uri, definition.uri)
-            assertEquals(Position(0, 4), definition.range.start)
-            assertEquals(Position(0, 10), definition.range.end)
+            assertEquals(Position(1, 4), definition.range.start)
+            assertEquals(Position(1, 10), definition.range.end)
             assertEquals(definition, declaration)
+            assertEquals(Position(0, 6), typeDefinition.range.start)
+            assertEquals(Position(0, 12), typeDefinition.range.end)
         }
     }
 

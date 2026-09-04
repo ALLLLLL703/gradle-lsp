@@ -31,6 +31,7 @@ internal class GradleLanguageServer(
         capabilities.setTextDocumentSync(TextDocumentSyncKind.Full)
         capabilities.setDeclarationProvider(true)
         capabilities.setDefinitionProvider(true)
+        capabilities.setTypeDefinitionProvider(true)
         capabilities.setDocumentSymbolProvider(true)
         capabilities.experimental = mapOf(
             "gradleLsp" to mapOf(

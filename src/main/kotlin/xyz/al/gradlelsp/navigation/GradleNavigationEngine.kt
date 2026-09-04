@@ -31,6 +31,9 @@ internal class GradleNavigationEngine(
     override fun declarations(document: AnalysisDocument, offset: Int): List<SourceDefinition> =
         engineFor(document)?.declarations(document, offset).orEmpty()
 
+    override fun typeDefinitions(document: AnalysisDocument, offset: Int): List<SourceDefinition> =
+        engineFor(document)?.typeDefinitions(document, offset).orEmpty()
+
     private fun engineFor(document: AnalysisDocument): DocumentNavigationEngine? {
         check(!closed.get()) { "Gradle navigation engine is closed" }
         return synchronized(this) {

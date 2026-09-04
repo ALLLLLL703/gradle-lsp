@@ -13,6 +13,7 @@ import org.eclipse.lsp4j.LocationLink
 import org.eclipse.lsp4j.PublishDiagnosticsParams
 import org.eclipse.lsp4j.SymbolInformation
 import org.eclipse.lsp4j.SymbolKind
+import org.eclipse.lsp4j.TypeDefinitionParams
 import org.eclipse.lsp4j.jsonrpc.messages.Either
 import org.eclipse.lsp4j.services.LanguageClient
 import org.eclipse.lsp4j.services.TextDocumentService
@@ -141,6 +142,34 @@ internal class GradleTextDocumentService(
                 } catch (failure: Exception) {
                     logger.log(
                         "gradle-lsp: declaration failed for ${params.textDocument.uri}: " +
+                            (failure.message ?: failure::class.java.simpleName),
+                    )
+                    emptyDefinitions()
+                }
+            },
+            navigationExecutor,
+        )
+
+    override fun typeDefinition(
+        params: TypeDefinitionParams,
+    ): CompletableFuture<Either<List<Location>, List<LocationLink>>> =
+        CompletableFuture.supplyAsync(
+            {
+                try {
+                    val snapshot = documents.current(params.textDocument.uri)
+                        ?: return@supplyAsync emptyDefinitions()
+                    val offset = Utf16LineMap(snapshot.text).offsetAt(params.position)
+                        ?: return@supplyAsync emptyDefinitions()
+                    val definitions = navigation.typeDefinitions(
+                        AnalysisDocument(snapshot.uri, snapshot.fileName, snapshot.text),
+                        offset,
+                    )
+                    if (!documents.isCurrent(snapshot)) return@supplyAsync emptyDefinitions()
+
+                    Either.forLeft(definitions.map(LspDefinitionMapper::map))
+                } catch (failure: Exception) {
+                    logger.log(
+                        "gradle-lsp: type definition failed for ${params.textDocument.uri}: " +
                             (failure.message ?: failure::class.java.simpleName),
                     )
                     emptyDefinitions()
