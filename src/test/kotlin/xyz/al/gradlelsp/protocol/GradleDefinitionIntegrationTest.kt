@@ -261,6 +261,9 @@ class GradleDefinitionIntegrationTest {
                 val worker: Worker = WorkerImpl()
                 worker.work()
                 WorkerImpl().work()
+                class PropertyBox(val payload: Int) { fun copy() = payload }
+                val propertyBox = PropertyBox(1)
+                propertyBox.payload
             """.trimIndent()
             Files.writeString(script, text)
             Files.writeString(overlayScript, "val stale: Int = 1\n")
@@ -336,6 +339,18 @@ class GradleDefinitionIntegrationTest {
                 assertEquals(
                     listOf(Position(13, 13)),
                     overrideMemberReferences.map { location -> location.range.start },
+                )
+
+                val constructorPropertyReferences = textDocuments.references(
+                    ReferenceParams(
+                        TextDocumentIdentifier(script.toUri().toString()),
+                        Position(14, 23),
+                        ReferenceContext(false),
+                    ),
+                ).join()
+                assertEquals(
+                    listOf(Position(14, 51), Position(16, 12)),
+                    constructorPropertyReferences.map { location -> location.range.start },
                 )
             }
         } finally {

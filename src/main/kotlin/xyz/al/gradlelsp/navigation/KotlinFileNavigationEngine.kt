@@ -371,14 +371,7 @@ internal class KotlinFileNavigationEngine(
         offset: Int,
     ): List<DeclarationDescriptor> {
         semanticDeclarationAt(file, offset)?.let { declaration ->
-            val descriptor = when (declaration) {
-                is KtPrimaryConstructor,
-                is KtSecondaryConstructor,
-                -> context[BindingContext.CONSTRUCTOR, declaration]
-                is KtPropertyAccessor -> context[BindingContext.PROPERTY_ACCESSOR, declaration]
-                else -> context[BindingContext.DECLARATION_TO_DESCRIPTOR, declaration]
-            }
-            return listOfNotNull(descriptor)
+            return listOfNotNull(declarationDescriptor(context, declaration))
         }
         val reference = referenceAt(file, offset) ?: return emptyList()
         return referenceDescriptors(context, reference)
