@@ -4,7 +4,6 @@ import org.eclipse.lsp4j.Diagnostic
 import org.eclipse.lsp4j.DiagnosticSeverity
 import org.eclipse.lsp4j.Range
 import xyz.al.gradlelsp.analysis.SourceDiagnostic
-import xyz.al.gradlelsp.analysis.SourceDiagnosticKind
 import xyz.al.gradlelsp.analysis.SourceDiagnosticSeverity
 
 internal object LspDiagnosticMapper {
@@ -18,7 +17,7 @@ internal object LspDiagnosticMapper {
                 ),
                 diagnostic.message,
                 diagnostic.severity.toLspSeverity(),
-                diagnostic.kind.sourceName(),
+                diagnostic.source,
             )
         }
     }
@@ -28,11 +27,5 @@ internal object LspDiagnosticMapper {
             SourceDiagnosticSeverity.ERROR -> DiagnosticSeverity.Error
             SourceDiagnosticSeverity.WARNING -> DiagnosticSeverity.Warning
             SourceDiagnosticSeverity.INFORMATION -> DiagnosticSeverity.Information
-        }
-
-    private fun SourceDiagnosticKind.sourceName(): String =
-        when (this) {
-            SourceDiagnosticKind.SYNTAX -> "kotlin-psi"
-            SourceDiagnosticKind.SEMANTIC -> "kotlin-compiler"
         }
 }

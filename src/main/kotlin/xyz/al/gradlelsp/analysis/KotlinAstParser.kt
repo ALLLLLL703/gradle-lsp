@@ -22,6 +22,7 @@ internal class ParsedKotlinFile internal constructor(
                     message = error.errorDescription,
                     severity = SourceDiagnosticSeverity.ERROR,
                     kind = SourceDiagnosticKind.SYNTAX,
+                    source = "kotlin-psi",
                 )
             }
 }
@@ -52,8 +53,8 @@ internal class KotlinAstParser : AutoCloseable {
 internal class KotlinAstAnalyzer(
     private val parser: KotlinAstParser = KotlinAstParser(),
 ) : DocumentAnalyzer {
-    override fun analyze(fileName: String, text: String): List<SourceDiagnostic> =
-        parser.parse(fileName, text).syntaxDiagnostics()
+    override fun analyze(document: AnalysisDocument): List<SourceDiagnostic> =
+        parser.parse(document.fileName, document.text).syntaxDiagnostics()
 
     override fun close() = parser.close()
 }

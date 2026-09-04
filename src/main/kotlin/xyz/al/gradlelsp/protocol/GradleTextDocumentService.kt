@@ -7,8 +7,9 @@ import org.eclipse.lsp4j.DidSaveTextDocumentParams
 import org.eclipse.lsp4j.PublishDiagnosticsParams
 import org.eclipse.lsp4j.services.LanguageClient
 import org.eclipse.lsp4j.services.TextDocumentService
+import xyz.al.gradlelsp.analysis.AnalysisDocument
 import xyz.al.gradlelsp.analysis.DocumentAnalyzer
-import xyz.al.gradlelsp.analysis.KotlinAstAnalyzer
+import xyz.al.gradlelsp.analysis.defaultGradleAnalysisEngine
 import xyz.al.gradlelsp.documents.DocumentSnapshot
 import xyz.al.gradlelsp.documents.DocumentStore
 import xyz.al.gradlelsp.presentation.LspDiagnosticMapper
@@ -18,7 +19,7 @@ import java.util.concurrent.TimeUnit
 
 internal class GradleTextDocumentService(
     private val documents: DocumentStore = DocumentStore(),
-    private val analyzer: DocumentAnalyzer = KotlinAstAnalyzer(),
+    private val analyzer: DocumentAnalyzer = defaultGradleAnalysisEngine(),
     private val logger: ServerLogger = ServerLogger.standardError(),
     private val analysisExecutor: ExecutorService = newAnalysisExecutor(),
 ) : TextDocumentService, AutoCloseable {
@@ -54,7 +55,9 @@ internal class GradleTextDocumentService(
     private fun schedule(snapshot: DocumentSnapshot) {
         analysisExecutor.execute {
             try {
-                val diagnostics = analyzer.analyze(snapshot.fileName, snapshot.text)
+                val diagnostics = analyzer.analyze(
+                    AnalysisDocument(snapshot.uri, snapshot.fileName, snapshot.text),
+                )
                 if (documents.isCurrent(snapshot)) {
                     client?.publishDiagnostics(
                         PublishDiagnosticsParams(

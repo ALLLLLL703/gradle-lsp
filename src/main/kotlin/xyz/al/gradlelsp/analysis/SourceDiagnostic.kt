@@ -17,10 +17,17 @@ internal data class SourceDiagnostic(
     val message: String,
     val severity: SourceDiagnosticSeverity,
     val kind: SourceDiagnosticKind,
+    val source: String,
+)
+
+internal data class AnalysisDocument(
+    val uri: String,
+    val fileName: String,
+    val text: String,
 )
 
 internal interface DocumentAnalyzer : AutoCloseable {
-    fun analyze(fileName: String, text: String): List<SourceDiagnostic>
+    fun analyze(document: AnalysisDocument): List<SourceDiagnostic>
 
     override fun close() = Unit
 }
