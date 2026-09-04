@@ -29,8 +29,10 @@
 
 ## Tests and debugging
 
-- Add executable tests for every feature and bug fix before considering it complete.
-- Cover CLI success/failure, LSP lifecycle, UTF-16 ranges, document updates, malformed syntax, and semantic diagnostics where relevant.
+- Validate every feature and bug fix with an executable scenario before considering it complete.
+- Keep automated tests sparse and high-value: prefer a few end-to-end or integration scenarios over one test file per class.
+- Do not add unit tests for obvious argument plumbing, trivial accessors, or behavior already exercised by a stronger scenario.
+- Prioritize tests that open real `*.gradle.kts` content and cover malformed AST recovery, semantic diagnostics, UTF-16 ranges, document-version races, and LSP publication where relevant.
 - Use DAP MCP for runtime-only defects when static inspection and focused tests do not identify the cause.
 - Use Neovim MCP for editor integration tests when an actual LSP client interaction is required.
 
