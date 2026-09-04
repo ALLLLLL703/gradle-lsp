@@ -9,6 +9,7 @@ import org.jd.core.v1.api.printer.Printer
 import org.jetbrains.kotlin.com.intellij.psi.PsiNameIdentifierOwner
 import org.jetbrains.kotlin.com.intellij.psi.util.PsiTreeUtil
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
+import org.jetbrains.kotlin.descriptors.ConstructorDescriptor
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
 import org.jetbrains.kotlin.descriptors.FunctionDescriptor
 import org.jetbrains.kotlin.descriptors.PropertyDescriptor
@@ -206,6 +207,16 @@ internal data class JavaBinaryDeclarationTarget(
         fun from(descriptor: DeclarationDescriptor): JavaBinaryDeclarationTarget? =
             when (descriptor) {
                 is SyntheticPropertyDescriptor -> from(descriptor.getMethod)
+
+                is ConstructorDescriptor -> {
+                    val owner = descriptor.constructedClass
+                    JavaBinaryDeclarationTarget(
+                        Printer.CONSTRUCTOR,
+                        owner.jvmInternalName() ?: return null,
+                        owner.name.asString(),
+                        descriptor.computeJvmDescriptor(withName = false),
+                    )
+                }
 
                 is ClassDescriptor -> {
                     val internalName = descriptor.jvmInternalName() ?: return null

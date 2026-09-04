@@ -5,6 +5,7 @@ import org.jetbrains.kotlin.psi.KtNamedFunction
 import org.jetbrains.kotlin.psi.KtProperty
 import xyz.al.gradlelsp.gradle.GradleKotlinDslModelLoader
 import xyz.al.gradlelsp.navigation.KotlinFileNavigationEngine
+import xyz.al.gradlelsp.navigation.SourceDefinition
 import java.net.JarURLConnection
 import java.nio.file.Path
 import kotlin.test.Test
@@ -74,6 +75,32 @@ class KotlinAstParserTest {
             val localDeclaration = text.indexOf("answer", text.indexOf("fun scope"))
             val localReference = text.indexOf("answer", localDeclaration + "answer".length)
             assertEquals(localDeclaration, definitionOffset(localReference))
+        }
+    }
+
+    @Test
+    fun `definition preserves overloaded constructor declarations after PSI recovery`() {
+        val text = """
+            class Box {
+                constructor(value: Int) { println(value) }
+                constructor(value: CharSequence) { println(value) }
+            }
+            val broken =
+            val number = Box(1)
+            val text = Box("value")
+        """.trimIndent()
+        val script = Path.of("build.gradle.kts").toAbsolutePath().normalize()
+        val document = AnalysisDocument(script.toUri().toString(), script.fileName.toString(), text)
+
+        KotlinFileNavigationEngine().use { navigation ->
+            val numberCall = text.indexOf("Box", text.indexOf("val number"))
+            val textCall = text.indexOf("Box", text.indexOf("val text"))
+
+            assertEquals(text.indexOf("constructor"), navigation.definitions(document, numberCall).single().startOffset)
+            assertEquals(
+                text.indexOf("constructor", text.indexOf("constructor") + 1),
+                navigation.definitions(document, textCall).single().startOffset,
+            )
         }
     }
 
@@ -170,6 +197,29 @@ class KotlinAstParserTest {
     }
 
     @Test
+    fun `external Java definition preserves overloaded constructors`() {
+        val script = Path.of("build.gradle.kts").toAbsolutePath().normalize()
+        val model = GradleKotlinDslModelLoader().modelFor(script).copy(sourcePath = emptyList())
+        val text = """
+            val broken =
+            val empty = GradleException()
+            val message = GradleException("failure")
+        """.trimIndent()
+        val document = AnalysisDocument(script.toUri().toString(), script.fileName.toString(), text)
+
+        KotlinFileNavigationEngine(modelProvider = { model }).use { navigation ->
+            val emptyCall = text.indexOf("GradleException")
+            val messageCall = text.indexOf("GradleException", emptyCall + 1)
+            val emptyConstructor = navigation.definitions(document, emptyCall).single()
+            val messageConstructor = navigation.definitions(document, messageCall).single()
+
+            assertTrue(emptyConstructor.lineAtSelection().contains("GradleException()"))
+            assertTrue(messageConstructor.lineAtSelection().contains("GradleException(String"))
+            assertTrue(emptyConstructor.startOffset != messageConstructor.startOffset)
+        }
+    }
+
+    @Test
     fun `external Java declaration prefers attached source`() {
         val script = Path.of("build.gradle.kts").toAbsolutePath()
         val model = GradleKotlinDslModelLoader().modelFor(script)
@@ -217,6 +267,12 @@ class KotlinAstParserTest {
                 definition.sourceText.substring(definition.startOffset, definition.endOffset),
             )
         }
+    }
+
+    private fun SourceDefinition.lineAtSelection(): String {
+        val lineStart = sourceText.lastIndexOf('\n', startOffset - 1).let { index -> index + 1 }
+        val lineEnd = sourceText.indexOf('\n', endOffset).takeIf { index -> index >= 0 } ?: sourceText.length
+        return sourceText.substring(lineStart, lineEnd)
     }
 
     @Test

@@ -5,6 +5,7 @@ package xyz.al.gradlelsp.navigation
 import org.jetbrains.kotlin.com.intellij.psi.util.PsiTreeUtil
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.ClassKind
+import org.jetbrains.kotlin.descriptors.ConstructorDescriptor
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
 import org.jetbrains.kotlin.descriptors.DeserializedDescriptor
 import org.jetbrains.kotlin.descriptors.FunctionDescriptor
@@ -14,12 +15,15 @@ import org.jetbrains.kotlin.descriptors.TypeAliasDescriptor
 import org.jetbrains.kotlin.load.kotlin.JvmPackagePartSource
 import org.jetbrains.kotlin.load.kotlin.KotlinJvmBinarySourceElement
 import org.jetbrains.kotlin.psi.KtClassOrObject
+import org.jetbrains.kotlin.psi.KtDeclaration
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtNamedDeclaration
 import org.jetbrains.kotlin.psi.KtNamedFunction
 import org.jetbrains.kotlin.psi.KtProperty
+import org.jetbrains.kotlin.psi.KtSecondaryConstructor
 import org.jetbrains.kotlin.psi.KtTypeAlias
 import org.jetbrains.kotlin.renderer.DescriptorRenderer
+import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.serialization.deserialization.descriptors.DescriptorWithContainerSource
 import xyz.al.gradlelsp.analysis.KotlinAstParser
 import xyz.al.gradlelsp.documents.ExternalDocumentStore
@@ -46,12 +50,20 @@ internal class KotlinDescriptorStubDecompiler(
             }
             appendLine(rendered)
         }
-        val fileName = "${declaration.name.asString()}.decompiled.kt"
+        val declarationName = (declaration as? ConstructorDescriptor)
+            ?.constructedClass?.name?.asString()
+            ?: declaration.name.asString()
+        val fileName = "$declarationName.decompiled.kt"
         val parsed = parser.parse(fileName, text)
+        val context = parser.bindingContext(parsed)
         val target = KotlinStubDeclarationTarget.from(declaration)?.let { expected ->
-            KotlinStubDeclarationLocator.find(parsed.psi, expected)
+            KotlinStubDeclarationLocator.find(parsed.psi, context, expected)
         } ?: return null
-        val range = target.nameIdentifier?.textRange ?: return null
+        val range = when (target) {
+            is KtSecondaryConstructor -> target.getConstructorKeyword().textRange
+            is KtNamedDeclaration -> target.nameIdentifier?.textRange
+            else -> null
+        } ?: return null
         val external = documents.register(
             origin = binaryOrigin,
             displayName = fileName,
@@ -107,6 +119,7 @@ internal class KotlinDescriptorStubDecompiler(
 
 internal enum class KotlinStubDeclarationKind {
     CLASS,
+    CONSTRUCTOR,
     FUNCTION,
     PROPERTY,
     TYPE_ALIAS,
@@ -119,10 +132,12 @@ internal data class KotlinStubDeclarationTarget(
     val typeParameterCount: Int,
     val valueParameterCount: Int?,
     val hasExtensionReceiver: Boolean?,
+    val identity: CompilerDeclarationIdentity,
 ) {
     companion object {
         fun from(descriptor: DeclarationDescriptor): KotlinStubDeclarationTarget? {
             val kind = when (descriptor) {
+                is ConstructorDescriptor -> KotlinStubDeclarationKind.CONSTRUCTOR
                 is ClassDescriptor -> KotlinStubDeclarationKind.CLASS
                 is FunctionDescriptor -> KotlinStubDeclarationKind.FUNCTION
                 is PropertyDescriptor -> KotlinStubDeclarationKind.PROPERTY
@@ -147,6 +162,7 @@ internal data class KotlinStubDeclarationTarget(
                     is PropertyDescriptor -> descriptor.extensionReceiverParameter != null
                     else -> null
                 },
+                identity = CompilerDeclarationIdentity.from(descriptor) ?: return null,
             )
         }
     }
@@ -155,18 +171,31 @@ internal data class KotlinStubDeclarationTarget(
 internal object KotlinStubDeclarationLocator {
     fun find(
         file: KtFile,
+        context: BindingContext,
         target: KotlinStubDeclarationTarget,
-    ): KtNamedDeclaration? =
-        PsiTreeUtil.collectElementsOfType(file, KtNamedDeclaration::class.java)
+    ): KtDeclaration? =
+        PsiTreeUtil.collectElementsOfType(file, KtDeclaration::class.java)
             .asSequence()
-            .filter { candidate -> candidate.name == target.name }
+            .filter { candidate ->
+                target.kind == KotlinStubDeclarationKind.CONSTRUCTOR ||
+                    (candidate as? KtNamedDeclaration)?.name == target.name
+            }
             .filter { candidate -> candidate.containerNames() == target.containerNames }
-            .firstOrNull { candidate -> candidate.matches(target) }
+            .filter { candidate -> candidate.matches(target) }
+            .firstOrNull { candidate ->
+                val descriptor = when (candidate) {
+                    is KtSecondaryConstructor -> context[BindingContext.CONSTRUCTOR, candidate]
+                    else -> context[BindingContext.DECLARATION_TO_DESCRIPTOR, candidate]
+                }
+                descriptor != null && CompilerDeclarationIdentity.from(descriptor) == target.identity
+            }
 
-    private fun KtNamedDeclaration.matches(target: KotlinStubDeclarationTarget): Boolean =
+    private fun KtDeclaration.matches(target: KotlinStubDeclarationTarget): Boolean =
         when (target.kind) {
             KotlinStubDeclarationKind.CLASS ->
                 this is KtClassOrObject && typeParameters.size == target.typeParameterCount
+            KotlinStubDeclarationKind.CONSTRUCTOR ->
+                this is KtSecondaryConstructor && valueParameters.size == target.valueParameterCount
             KotlinStubDeclarationKind.FUNCTION ->
                 this is KtNamedFunction &&
                     typeParameters.size == target.typeParameterCount &&
@@ -180,7 +209,7 @@ internal object KotlinStubDeclarationLocator {
                 this is KtTypeAlias && typeParameters.size == target.typeParameterCount
         }
 
-    private fun KtNamedDeclaration.containerNames(): List<String> =
+    private fun KtDeclaration.containerNames(): List<String> =
         generateSequence(parent) { element -> element.parent }
             .filterIsInstance<KtClassOrObject>()
             .mapNotNull(KtClassOrObject::getName)

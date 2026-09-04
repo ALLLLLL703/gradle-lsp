@@ -22,6 +22,7 @@ internal data class CompilerDeclarationIdentity(
 ) {
     enum class Kind {
         CLASS,
+        CONSTRUCTOR,
         FUNCTION,
         PROPERTY,
         TYPE_ALIAS,
@@ -31,6 +32,7 @@ internal data class CompilerDeclarationIdentity(
         fun from(descriptor: DeclarationDescriptor): CompilerDeclarationIdentity? {
             val declaration = descriptor.navigationDeclaration()
             val kind = when (declaration) {
+                is ConstructorDescriptor -> Kind.CONSTRUCTOR
                 is ClassDescriptor -> Kind.CLASS
                 is FunctionDescriptor -> Kind.FUNCTION
                 is PropertyDescriptor -> Kind.PROPERTY
@@ -40,7 +42,9 @@ internal data class CompilerDeclarationIdentity(
             val callable = declaration as? CallableDescriptor
             return CompilerDeclarationIdentity(
                 kind = kind,
-                fqName = DescriptorUtils.getFqNameSafe(declaration).asString(),
+                fqName = DescriptorUtils.getFqNameSafe(
+                    (declaration as? ConstructorDescriptor)?.constructedClass ?: declaration,
+                ).asString(),
                 extensionReceiverType = callable?.extensionReceiverParameter?.type?.let(TYPE_RENDERER::renderType),
                 parameterTypes = callable?.valueParameters.orEmpty().map { parameter ->
                     TYPE_RENDERER.renderType(parameter.type)
@@ -54,8 +58,7 @@ internal data class CompilerDeclarationIdentity(
 
 internal fun DeclarationDescriptor.navigationDeclaration(): DeclarationDescriptor =
     when (this) {
-        is PropertyAccessorDescriptor -> correspondingProperty
-        is ConstructorDescriptor -> constructedClass
+        is PropertyAccessorDescriptor -> correspondingProperty.original
         else -> original
     }
 

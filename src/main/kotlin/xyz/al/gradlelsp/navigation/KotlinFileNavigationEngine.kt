@@ -65,7 +65,7 @@ internal class KotlinFileNavigationEngine(
         check(!closed.get()) { "Kotlin navigation engine is closed" }
 
         val localFile = localParser.parse(document.fileName, document.text)
-        declarationAt(localFile, offset)?.let { declaration ->
+        semanticDeclarationAt(localFile, offset)?.let { declaration ->
             return listOf(sourceDefinition(document, declaration))
         }
         resolveLocalReference(localFile, offset)?.let { declaration ->
@@ -80,7 +80,6 @@ internal class KotlinFileNavigationEngine(
         val descriptors = resolveDescriptors(parser, parsedFile, reference)
         return descriptors.flatMap { descriptor ->
             val sourceDeclaration = DescriptorToSourceUtils.descriptorToDeclaration(descriptor)
-                as? KtNamedDeclaration
             if (sourceDeclaration?.containingFile === parsedFile.psi) {
                 listOf(sourceDefinition(document, sourceDeclaration))
             } else {
@@ -540,13 +539,12 @@ internal class KotlinFileNavigationEngine(
     private fun resolveLocalReference(
         file: ParsedKotlinFile,
         offset: Int,
-    ): KtNamedDeclaration? = runCatching {
+    ): PsiElement? = runCatching {
         val reference = referenceAt(file, offset) ?: return@runCatching null
         resolveDescriptors(localParser, file, reference)
             .singleOrNull()
             ?.let(DescriptorToSourceUtils::descriptorToDeclaration)
             ?.takeIf { declaration -> declaration.containingFile === file.psi }
-            as? KtNamedDeclaration
     }.getOrNull()
 
     private fun resolveDescriptors(
@@ -705,9 +703,9 @@ internal class KotlinFileNavigationEngine(
 
     private fun sourceDefinition(
         document: AnalysisDocument,
-        declaration: KtNamedDeclaration,
+        declaration: PsiElement,
     ): SourceDefinition {
-        val range = declaration.nameIdentifier?.textRange ?: declaration.textRange
+        val range = declarationSelectionRange(declaration)
         return SourceDefinition(
             document.uri,
             document.text,

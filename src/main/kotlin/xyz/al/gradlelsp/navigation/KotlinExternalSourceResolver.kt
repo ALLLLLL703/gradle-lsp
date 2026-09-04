@@ -1,6 +1,7 @@
 package xyz.al.gradlelsp.navigation
 
 import org.jd.core.v1.api.printer.Printer
+import org.jetbrains.kotlin.com.intellij.openapi.util.TextRange
 import org.jetbrains.kotlin.com.intellij.psi.PsiArrayType
 import org.jetbrains.kotlin.com.intellij.psi.PsiClass
 import org.jetbrains.kotlin.com.intellij.psi.PsiClassType
@@ -12,9 +13,13 @@ import org.jetbrains.kotlin.com.intellij.psi.PsiPrimitiveType
 import org.jetbrains.kotlin.com.intellij.psi.PsiType
 import org.jetbrains.kotlin.com.intellij.psi.PsiTypeParameter
 import org.jetbrains.kotlin.com.intellij.psi.util.PsiTreeUtil
+import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
+import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtDeclaration
 import org.jetbrains.kotlin.psi.KtNamedDeclaration
+import org.jetbrains.kotlin.psi.KtPrimaryConstructor
+import org.jetbrains.kotlin.psi.KtSecondaryConstructor
 import org.jetbrains.kotlin.resolve.BindingContext
 import xyz.al.gradlelsp.analysis.KotlinAstParser
 import xyz.al.gradlelsp.documents.ExternalDocumentStore
@@ -73,20 +78,49 @@ internal class KotlinExternalSourceResolver(
     ): SourceDefinition? = runCatching {
         val parsed = parser.parse(unit.fileName, unit.text)
         if (parsed.psi.packageFqName.asString() != packageName) return@runCatching null
-        val namedCandidates = PsiTreeUtil.collectElementsOfType(parsed.psi, KtDeclaration::class.java)
-            .asSequence()
-            .filterIsInstance<KtNamedDeclaration>()
-            .filter { candidate -> candidate.name == target.fqName.substringAfterLast('.') }
-            .toList()
-        if (namedCandidates.isEmpty()) return@runCatching null
+        val candidates = PsiTreeUtil.collectElementsOfType(parsed.psi, KtDeclaration::class.java)
         val context = parser.bindingContext(parsed)
-        val declaration = namedCandidates.firstOrNull { candidate ->
-            val candidateDescriptor = context[BindingContext.DECLARATION_TO_DESCRIPTOR, candidate]
-            candidateDescriptor != null && CompilerDeclarationIdentity.from(candidateDescriptor) == target
-        }
-            ?: return@runCatching null
-        sourceDefinition(unit, declaration.nameIdentifier?.textRange ?: return@runCatching null)
+        val declaration = candidates.firstNotNullOfOrNull { candidate ->
+            val descriptor = candidateDescriptor(candidate, target.kind, context)
+                ?: return@firstNotNullOfOrNull null
+            if (CompilerDeclarationIdentity.from(descriptor) != target) {
+                return@firstNotNullOfOrNull null
+            }
+            candidateSelectionRange(candidate)?.let { range -> candidate to range }
+        } ?: return@runCatching null
+        sourceDefinition(unit, declaration.second)
     }.getOrNull()
+
+    private fun candidateDescriptor(
+        candidate: KtDeclaration,
+        targetKind: CompilerDeclarationIdentity.Kind,
+        context: BindingContext,
+    ): DeclarationDescriptor? =
+        when (candidate) {
+            is KtPrimaryConstructor,
+            is KtSecondaryConstructor,
+            -> context[BindingContext.CONSTRUCTOR, candidate]
+            is KtClassOrObject -> {
+                val classDescriptor = context[BindingContext.DECLARATION_TO_DESCRIPTOR, candidate]
+                    as? ClassDescriptor
+                if (targetKind == CompilerDeclarationIdentity.Kind.CONSTRUCTOR) {
+                    classDescriptor?.unsubstitutedPrimaryConstructor
+                } else {
+                    classDescriptor
+                }
+            }
+            else -> context[BindingContext.DECLARATION_TO_DESCRIPTOR, candidate]
+        }
+
+    private fun candidateSelectionRange(candidate: KtDeclaration): TextRange? =
+        when (candidate) {
+            is KtSecondaryConstructor -> candidate.getConstructorKeyword().textRange
+            is KtPrimaryConstructor -> candidate.getConstructorKeyword()?.textRange
+                ?: candidate.getContainingClassOrObject().nameIdentifier?.textRange
+            is KtClassOrObject -> candidate.nameIdentifier?.textRange
+            is KtNamedDeclaration -> candidate.nameIdentifier?.textRange
+            else -> null
+        }
 
     private fun findJavaDeclaration(
         unit: SourceUnit,
@@ -94,14 +128,16 @@ internal class KotlinExternalSourceResolver(
         descriptor: DeclarationDescriptor,
         parser: KotlinAstParser,
     ): SourceDefinition? = runCatching {
-        val target = JavaBinaryDeclarationTarget.from(descriptor.navigationDeclaration())
+        val target = JavaBinaryDeclarationTarget.from(descriptor)
             ?: return@runCatching null
         val parsed = parser.parseJava(unit.fileName, unit.text) ?: return@runCatching null
         if (parsed.packageName != packageName) return@runCatching null
         val declaration = when (target.type) {
             Printer.TYPE -> PsiTreeUtil.collectElementsOfType(parsed, PsiClass::class.java)
                 .firstOrNull { candidate -> candidate.jvmInternalName() == target.ownerInternalName }
-            Printer.METHOD -> PsiTreeUtil.collectElementsOfType(parsed, PsiMethod::class.java)
+            Printer.METHOD,
+            Printer.CONSTRUCTOR,
+            -> PsiTreeUtil.collectElementsOfType(parsed, PsiMethod::class.java)
                 .firstOrNull { candidate ->
                     candidate.containingClass?.jvmInternalName() == target.ownerInternalName &&
                         candidate.name == target.name &&
@@ -119,7 +155,7 @@ internal class KotlinExternalSourceResolver(
 
     private fun sourceDefinition(
         unit: SourceUnit,
-        range: org.jetbrains.kotlin.com.intellij.openapi.util.TextRange,
+        range: TextRange,
     ): SourceDefinition {
         val external = documents.register(
             origin = unit.origin,
@@ -261,7 +297,7 @@ private fun PsiMethod.jvmDescriptor(): String? {
     val parameters = parameterList.parameters.map { parameter ->
         parameter.type.jvmDescriptor() ?: return null
     }
-    val result = returnType?.jvmDescriptor() ?: return null
+    val result = if (isConstructor) "V" else returnType?.jvmDescriptor() ?: return null
     return "(${parameters.joinToString("")})$result"
 }
 
