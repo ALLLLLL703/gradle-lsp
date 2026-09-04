@@ -33,6 +33,7 @@ internal class GradleLanguageServer(
         capabilities.setDeclarationProvider(true)
         capabilities.setDefinitionProvider(true)
         capabilities.setTypeDefinitionProvider(true)
+        capabilities.setImplementationProvider(true)
         capabilities.setReferencesProvider(true)
         capabilities.setDocumentSymbolProvider(true)
         capabilities.experimental = mapOf(

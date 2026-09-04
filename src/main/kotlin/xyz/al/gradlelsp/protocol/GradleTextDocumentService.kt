@@ -8,6 +8,7 @@ import org.eclipse.lsp4j.DidOpenTextDocumentParams
 import org.eclipse.lsp4j.DidSaveTextDocumentParams
 import org.eclipse.lsp4j.DocumentSymbol
 import org.eclipse.lsp4j.DocumentSymbolParams
+import org.eclipse.lsp4j.ImplementationParams
 import org.eclipse.lsp4j.Location
 import org.eclipse.lsp4j.LocationLink
 import org.eclipse.lsp4j.PublishDiagnosticsParams
@@ -152,6 +153,37 @@ internal class GradleTextDocumentService(
                 } catch (failure: Exception) {
                     logger.log(
                         "gradle-lsp: declaration failed for ${params.textDocument.uri}: " +
+                            (failure.message ?: failure::class.java.simpleName),
+                    )
+                    emptyDefinitions()
+                }
+            },
+            navigationExecutor,
+        )
+
+    override fun implementation(
+        params: ImplementationParams,
+    ): CompletableFuture<Either<List<Location>, List<LocationLink>>> =
+        CompletableFuture.supplyAsync(
+            {
+                try {
+                    val snapshot = documents.current(params.textDocument.uri)
+                        ?: return@supplyAsync emptyDefinitions()
+                    val workspaceRevision = documents.revision()
+                    val offset = Utf16LineMap(snapshot.text).offsetAt(params.position)
+                        ?: return@supplyAsync emptyDefinitions()
+                    val implementations = navigation.implementations(
+                        AnalysisDocument(snapshot.uri, snapshot.fileName, snapshot.text),
+                        offset,
+                    )
+                    if (!documents.isCurrent(snapshot) || documents.revision() != workspaceRevision) {
+                        return@supplyAsync emptyDefinitions()
+                    }
+
+                    Either.forLeft(implementations.map(LspDefinitionMapper::map))
+                } catch (failure: Exception) {
+                    logger.log(
+                        "gradle-lsp: implementation failed for ${params.textDocument.uri}: " +
                             (failure.message ?: failure::class.java.simpleName),
                     )
                     emptyDefinitions()

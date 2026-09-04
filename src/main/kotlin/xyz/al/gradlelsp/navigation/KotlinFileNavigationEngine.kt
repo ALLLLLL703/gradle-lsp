@@ -6,7 +6,9 @@ import org.jetbrains.kotlin.com.intellij.openapi.util.TextRange
 import org.jetbrains.kotlin.com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.com.intellij.psi.util.PsiTreeUtil
 import org.jetbrains.kotlin.descriptors.CallableDescriptor
+import org.jetbrains.kotlin.descriptors.CallableMemberDescriptor
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
+import org.jetbrains.kotlin.descriptors.ClassKind
 import org.jetbrains.kotlin.descriptors.ConstructorDescriptor
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
 import org.jetbrains.kotlin.descriptors.PropertyAccessorDescriptor
@@ -14,10 +16,12 @@ import org.jetbrains.kotlin.descriptors.ReceiverParameterDescriptor
 import org.jetbrains.kotlin.descriptors.TypeAliasDescriptor
 import org.jetbrains.kotlin.descriptors.TypeParameterDescriptor
 import org.jetbrains.kotlin.descriptors.VariableDescriptor
+import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtDeclaration
 import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtNamedDeclaration
+import org.jetbrains.kotlin.psi.KtParameter
 import org.jetbrains.kotlin.psi.KtPrimaryConstructor
 import org.jetbrains.kotlin.psi.KtPropertyAccessor
 import org.jetbrains.kotlin.psi.KtSecondaryConstructor
@@ -42,6 +46,7 @@ import xyz.al.gradlelsp.gradle.GradleKotlinDslModelLoader
 import xyz.al.gradlelsp.gradle.GradleKotlinDslModelProvider
 import java.net.URI
 import java.nio.file.Path
+import java.util.ArrayDeque
 import java.util.LinkedHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -177,6 +182,154 @@ internal class KotlinFileNavigationEngine(
         }
     }
 
+    override fun implementations(document: AnalysisDocument, offset: Int): List<SourceDefinition> {
+        check(!closed.get()) { "Kotlin navigation engine is closed" }
+        return withTargetAnalysis(document, offset) { analysis ->
+            val targets = implementationTargets(analysis)
+            if (targets.isEmpty()) return@withTargetAnalysis emptyList()
+
+            val implementations = mutableListOf<SourceDefinition>()
+            workspaceDocuments.forEachDocument(document) { candidateDocument ->
+                try {
+                    analyzeWorkspaceDocument(candidateDocument, analysis.usesGradleModel) { parsedFile, context ->
+                        PsiTreeUtil.collectElementsOfType(parsedFile.psi, KtDeclaration::class.java)
+                            .asSequence()
+                            .filterNot { declaration -> declaration is KtPropertyAccessor }
+                            .mapNotNull { declaration ->
+                                declarationDescriptor(context, declaration)?.let { descriptor ->
+                                    descriptor to declaration
+                                }
+                            }
+                            .filter { (descriptor) ->
+                                when (descriptor) {
+                                    is ClassDescriptor ->
+                                        descriptor.kind != ClassKind.ENUM_ENTRY &&
+                                            targets.filterIsInstance<ImplementationTarget.Class>()
+                                                .any { target ->
+                                                    hasTargetSupertype(
+                                                        descriptor,
+                                                        target.target,
+                                                        parsedFile,
+                                                        candidateDocument,
+                                                    )
+                                                }
+                                    is CallableMemberDescriptor ->
+                                        descriptor !is ConstructorDescriptor &&
+                                            descriptor.kind == CallableMemberDescriptor.Kind.DECLARATION &&
+                                            targets.filterIsInstance<ImplementationTarget.Callable>()
+                                                .any { target ->
+                                                    overridesTarget(
+                                                        descriptor,
+                                                        target.target,
+                                                        parsedFile,
+                                                        candidateDocument,
+                                                    )
+                                                }
+                                    else -> false
+                                }
+                            }
+                            .mapNotNullTo(implementations) { (descriptor) ->
+                                semanticTarget(descriptor, parsedFile, candidateDocument).source?.definition
+                            }
+                    }
+                } catch (_: Exception) {
+                    // Continue with other scripts when one model or recovered file cannot be analyzed.
+                }
+            }
+            implementations.distinctBy { implementation ->
+                listOf(implementation.uri, implementation.startOffset, implementation.endOffset)
+            }.sortedWith(
+                compareBy<SourceDefinition> { implementation -> implementation.uri }
+                    .thenBy { implementation -> implementation.startOffset }
+                    .thenBy { implementation -> implementation.endOffset },
+            )
+        }
+    }
+
+    private fun implementationTargets(analysis: TargetAnalysis): List<ImplementationTarget> =
+        analysis.targets.mapNotNull { target ->
+            when (val descriptor = target.descriptor) {
+                is ConstructorDescriptor -> semanticTarget(
+                    descriptor.constructedClass,
+                    analysis.file,
+                    analysis.document,
+                ).let(ImplementationTarget::Class)
+                is TypeAliasDescriptor -> (classifierOf(descriptor.expandedType) as? ClassDescriptor)
+                    ?.let { expanded -> semanticTarget(expanded, analysis.file, analysis.document) }
+                    ?.let(ImplementationTarget::Class)
+                is ClassDescriptor -> ImplementationTarget.Class(target)
+                is CallableMemberDescriptor -> ImplementationTarget.Callable(target)
+                else -> null
+            }
+        }.distinctBy { target -> target.target.source ?: target.target.descriptor.original }
+
+    private fun hasTargetSupertype(
+        candidate: ClassDescriptor,
+        target: SemanticTarget,
+        file: ParsedKotlinFile,
+        document: AnalysisDocument,
+    ): Boolean {
+        val queue = ArrayDeque<DeclarationDescriptor>()
+        candidate.typeConstructor.supertypes.mapNotNullTo(queue) { type ->
+            type.constructor.declarationDescriptor
+        }
+        val visited = mutableSetOf<DeclarationDescriptor>()
+        while (queue.isNotEmpty()) {
+            val descriptor = queue.removeFirst().original
+            if (!visited.add(descriptor)) continue
+            if (sameTarget(target, semanticTarget(descriptor, file, document))) return true
+            descriptor.typeConstructorOrNull()?.supertypes?.mapNotNullTo(queue) { type ->
+                type.constructor.declarationDescriptor
+            }
+        }
+        return false
+    }
+
+    private fun DeclarationDescriptor.typeConstructorOrNull() =
+        when (this) {
+            is ClassDescriptor -> typeConstructor
+            is TypeAliasDescriptor -> expandedType.constructor
+            else -> null
+        }
+
+    private fun overridesTarget(
+        candidate: CallableMemberDescriptor,
+        target: SemanticTarget,
+        file: ParsedKotlinFile,
+        document: AnalysisDocument,
+    ): Boolean {
+        val queue = ArrayDeque<CallableMemberDescriptor>()
+        queue.addAll(candidate.overriddenDescriptors)
+        val visited = mutableSetOf<DeclarationDescriptor>()
+        while (queue.isNotEmpty()) {
+            val overridden = queue.removeFirst()
+            if (!visited.add(overridden.original)) continue
+            val effective = DescriptorToSourceUtils.getEffectiveReferencedDescriptors(overridden)
+            if (effective.any { descriptor ->
+                    sameTarget(target, semanticTarget(descriptor, file, document))
+                }
+            ) {
+                return true
+            }
+            queue.addAll(overridden.overriddenDescriptors)
+        }
+        return false
+    }
+
+    private fun declarationDescriptor(
+        context: BindingContext,
+        declaration: KtDeclaration,
+    ): DeclarationDescriptor? =
+        when (declaration) {
+            is KtPrimaryConstructor,
+            is KtSecondaryConstructor,
+            -> context[BindingContext.CONSTRUCTOR, declaration]
+            is KtPropertyAccessor -> context[BindingContext.PROPERTY_ACCESSOR, declaration]
+            is KtParameter -> context[BindingContext.PRIMARY_CONSTRUCTOR_PARAMETER, declaration]
+                ?: context[BindingContext.DECLARATION_TO_DESCRIPTOR, declaration]
+            else -> context[BindingContext.DECLARATION_TO_DESCRIPTOR, declaration]
+        }
+
     private fun withTargetAnalysis(
         document: AnalysisDocument,
         offset: Int,
@@ -210,7 +363,7 @@ internal class KotlinFileNavigationEngine(
         val targets = semanticDescriptorsAt(parsedFile, context, offset)
             .map { descriptor -> semanticTarget(descriptor, parsedFile, document) }
             .distinctBy { target -> target.source ?: target.descriptor.original }
-        return TargetAnalysis(usesGradleModel, targets)
+        return TargetAnalysis(usesGradleModel, parsedFile, document, targets)
     }
 
     private fun semanticDescriptorsAt(
@@ -460,6 +613,8 @@ internal class KotlinFileNavigationEngine(
             is KtPrimaryConstructor -> declaration.getConstructorKeyword()?.textRange
                 ?: declaration.getContainingClassOrObject().nameIdentifier?.textRange
             is KtPropertyAccessor -> declaration.namePlaceholder.textRange
+            is KtClassOrObject -> declaration.nameIdentifier?.textRange
+                ?: declaration.getDeclarationKeyword()?.textRange
             is KtNamedDeclaration -> declaration.nameIdentifier?.textRange
             else -> null
         }
@@ -576,8 +731,18 @@ internal class KotlinFileNavigationEngine(
 
     private data class TargetAnalysis(
         val usesGradleModel: Boolean,
+        val file: ParsedKotlinFile,
+        val document: AnalysisDocument,
         val targets: List<SemanticTarget>,
     )
+
+    private sealed interface ImplementationTarget {
+        val target: SemanticTarget
+
+        data class Class(override val target: SemanticTarget) : ImplementationTarget
+
+        data class Callable(override val target: SemanticTarget) : ImplementationTarget
+    }
 
     private data class SemanticTarget(
         val descriptor: DeclarationDescriptor,

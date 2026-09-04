@@ -23,5 +23,7 @@ internal interface DocumentNavigationEngine : AutoCloseable {
         includeDeclaration: Boolean,
     ): List<SourceDefinition> = emptyList()
 
+    fun implementations(document: AnalysisDocument, offset: Int): List<SourceDefinition> = emptyList()
+
     override fun close() = Unit
 }

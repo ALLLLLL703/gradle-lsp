@@ -5,6 +5,7 @@ import org.eclipse.lsp4j.DeclarationParams
 import org.eclipse.lsp4j.DefinitionParams
 import org.eclipse.lsp4j.DocumentSymbolCapabilities
 import org.eclipse.lsp4j.DocumentSymbolParams
+import org.eclipse.lsp4j.ImplementationParams
 import org.eclipse.lsp4j.InitializeParams
 import org.eclipse.lsp4j.Position
 import org.eclipse.lsp4j.ReferenceContext
@@ -151,6 +152,75 @@ class GradleDefinitionIntegrationTest {
             assertEquals(SymbolKind.Object, flat.map { it.left }.single { it.name == "Registry" }.kind)
             assertEquals(SymbolKind.EnumMember, flat.map { it.left }.single { it.name == "FAST" }.kind)
             assertTrue(flat.map { it.left }.none { it.name == "local" })
+        }
+    }
+
+    @Test
+    fun `implementation finds transitive class and member implementations in recovered workspace scripts`() {
+        val project = Files.createTempDirectory("gradle-lsp-implementations")
+        try {
+            val settings = project.resolve("settings.gradle.kts")
+            val script = project.resolve("build.gradle.kts")
+            val otherScript = project.resolve("jobs.gradle.kts")
+            Files.writeString(settings, "rootProject.name = \"fixture\"\n")
+            val text = """
+                val broken =
+                val typeTarget = Runnable::class
+                val memberTarget = Runnable::run
+                abstract class BaseJob : Runnable
+                class LocalJob : BaseJob() { override fun run() = Unit }
+            """.trimIndent()
+            Files.writeString(script, text)
+            Files.writeString(
+                otherScript,
+                """
+                    interface MarkerJob : Runnable
+                    object RemoteJob : Runnable { override fun run() = Unit }
+                """.trimIndent(),
+            )
+
+            val documents = DocumentStore().apply { open(script.toUri().toString(), 1, text) }
+            val textDocuments = GradleTextDocumentService(documents = documents, analyzer = noAnalysis())
+            val initialize = InitializeParams().apply {
+                workspaceFolders = listOf(WorkspaceFolder(project.toUri().toString(), "fixture"))
+            }
+
+            GradleLanguageServer(textDocuments = textDocuments).use { server ->
+                val capabilities = server.initialize(initialize).join().capabilities
+                assertTrue(capabilities.implementationProvider.left)
+
+                val classImplementations = textDocuments.implementation(
+                    ImplementationParams(
+                        TextDocumentIdentifier(script.toUri().toString()),
+                        Position(1, 18),
+                    ),
+                ).join().left
+                assertEquals(
+                    listOf(
+                        script.toUri().toString() to Position(3, 15),
+                        script.toUri().toString() to Position(4, 6),
+                        otherScript.toUri().toString() to Position(0, 10),
+                        otherScript.toUri().toString() to Position(1, 7),
+                    ),
+                    classImplementations.map { location -> location.uri to location.range.start },
+                )
+
+                val memberImplementations = textDocuments.implementation(
+                    ImplementationParams(
+                        TextDocumentIdentifier(script.toUri().toString()),
+                        Position(2, 30),
+                    ),
+                ).join().left
+                assertEquals(
+                    listOf(
+                        script.toUri().toString() to Position(4, 42),
+                        otherScript.toUri().toString() to Position(1, 43),
+                    ),
+                    memberImplementations.map { location -> location.uri to location.range.start },
+                )
+            }
+        } finally {
+            project.toFile().deleteRecursively()
         }
     }
 

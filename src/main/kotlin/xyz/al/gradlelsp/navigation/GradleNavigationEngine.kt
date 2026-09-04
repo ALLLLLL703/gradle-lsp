@@ -44,6 +44,9 @@ internal class GradleNavigationEngine(
     ): List<SourceDefinition> =
         engineFor(document)?.references(document, offset, includeDeclaration).orEmpty()
 
+    override fun implementations(document: AnalysisDocument, offset: Int): List<SourceDefinition> =
+        engineFor(document)?.implementations(document, offset).orEmpty()
+
     private fun engineFor(document: AnalysisDocument): DocumentNavigationEngine? {
         check(!closed.get()) { "Gradle navigation engine is closed" }
         return synchronized(this) {
