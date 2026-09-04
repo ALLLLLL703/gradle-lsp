@@ -427,8 +427,16 @@ internal class KotlinFileNavigationEngine(
         val firstDescriptor = first.descriptor
         val secondDescriptor = second.descriptor
         if (firstDescriptor is TypeAliasDescriptor && secondDescriptor is TypeAliasDescriptor) {
-            return org.jetbrains.kotlin.resolve.DescriptorUtils.getFqNameSafe(firstDescriptor) ==
-                org.jetbrains.kotlin.resolve.DescriptorUtils.getFqNameSafe(secondDescriptor)
+            if (CompilerDeclarationIdentity.from(firstDescriptor) != CompilerDeclarationIdentity.from(secondDescriptor)) {
+                return false
+            }
+            val firstOrigin = firstDescriptor.kotlinBinaryOrigin()
+            val secondOrigin = secondDescriptor.kotlinBinaryOrigin()
+            return if (firstOrigin != null || secondOrigin != null) {
+                firstOrigin != null && firstOrigin == secondOrigin
+            } else {
+                firstDescriptor == secondDescriptor
+            }
         }
         return runCatching {
             DescriptorEquivalenceForOverrides.areEquivalent(

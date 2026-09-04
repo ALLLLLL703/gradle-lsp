@@ -6,13 +6,18 @@ import org.jetbrains.kotlin.descriptors.CallableDescriptor
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.ConstructorDescriptor
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
+import org.jetbrains.kotlin.descriptors.DeclarationDescriptorWithSource
 import org.jetbrains.kotlin.descriptors.FunctionDescriptor
 import org.jetbrains.kotlin.descriptors.PackageFragmentDescriptor
 import org.jetbrains.kotlin.descriptors.PropertyAccessorDescriptor
 import org.jetbrains.kotlin.descriptors.PropertyDescriptor
 import org.jetbrains.kotlin.descriptors.TypeAliasDescriptor
+import org.jetbrains.kotlin.load.kotlin.JvmPackagePartSource
+import org.jetbrains.kotlin.load.kotlin.KotlinJvmBinaryClass
+import org.jetbrains.kotlin.load.kotlin.KotlinJvmBinarySourceElement
 import org.jetbrains.kotlin.renderer.DescriptorRenderer
 import org.jetbrains.kotlin.resolve.DescriptorUtils
+import org.jetbrains.kotlin.serialization.deserialization.descriptors.DescriptorWithContainerSource
 
 internal data class CompilerDeclarationIdentity(
     val kind: Kind,
@@ -61,6 +66,26 @@ internal fun DeclarationDescriptor.navigationDeclaration(): DeclarationDescripto
         is PropertyAccessorDescriptor -> correspondingProperty.original
         else -> original
     }
+
+internal fun DeclarationDescriptor.kotlinBinaryOrigin(): String? {
+    val declaration = navigationDeclaration()
+    val ownSource = (declaration as? DeclarationDescriptorWithSource)
+        ?.source as? KotlinJvmBinarySourceElement
+    ownSource?.binaryClass?.let { binary -> return binary.stableOrigin() }
+
+    val containerSource = (declaration as? DescriptorWithContainerSource)?.containerSource
+    if (containerSource is JvmPackagePartSource) {
+        containerSource.knownJvmBinaryClass?.let { binary -> return binary.stableOrigin() }
+    }
+
+    val containingClass = generateSequence(declaration.containingDeclaration) { descriptor ->
+        descriptor.containingDeclaration
+    }.filterIsInstance<ClassDescriptor>().firstOrNull()
+    val classSource = containingClass?.source as? KotlinJvmBinarySourceElement
+    return classSource?.binaryClass?.stableOrigin()
+}
+
+private fun KotlinJvmBinaryClass.stableOrigin(): String = containingLibrary ?: location
 
 internal fun DeclarationDescriptor.packageName(): String? =
     generateSequence(this) { descriptor -> descriptor.containingDeclaration }
