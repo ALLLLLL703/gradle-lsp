@@ -127,6 +127,7 @@ internal class KotlinFileNavigationEngine(
             implicitImports = model.implicitImports,
             baseClassName = template.className,
             implicitReceiverClassName = template.implicitReceiverClassName,
+            modelGeneration = model.generation,
         )
         modelParsers[key]?.let { return it }
         val parser = KotlinAstParser(
@@ -174,6 +175,7 @@ internal class KotlinFileNavigationEngine(
         val implicitImports: List<String>,
         val baseClassName: String,
         val implicitReceiverClassName: String,
+        val modelGeneration: String,
     )
 
     private companion object {
