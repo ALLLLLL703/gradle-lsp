@@ -2,6 +2,7 @@ package xyz.al.gradlelsp.navigation
 
 import xyz.al.gradlelsp.analysis.AnalysisDocument
 import xyz.al.gradlelsp.analysis.GradleDsl
+import xyz.al.gradlelsp.documents.ExternalDocumentStore
 import java.util.EnumMap
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -42,5 +43,10 @@ internal class GradleNavigationEngine(
     }
 }
 
-internal fun defaultGradleNavigationEngine(): GradleNavigationEngine =
-    GradleNavigationEngine().use(GradleDsl.KOTLIN, KotlinFileNavigationEngine())
+internal fun defaultGradleNavigationEngine(
+    externalDocuments: ExternalDocumentStore = ExternalDocumentStore(),
+): GradleNavigationEngine =
+    GradleNavigationEngine().use(
+        GradleDsl.KOTLIN,
+        KotlinFileNavigationEngine(externalDocuments = externalDocuments),
+    )

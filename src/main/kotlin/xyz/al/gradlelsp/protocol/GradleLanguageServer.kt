@@ -5,6 +5,7 @@ import org.eclipse.lsp4j.InitializeResult
 import org.eclipse.lsp4j.ServerCapabilities
 import org.eclipse.lsp4j.ServerInfo
 import org.eclipse.lsp4j.TextDocumentSyncKind
+import org.eclipse.lsp4j.jsonrpc.services.JsonRequest
 import org.eclipse.lsp4j.services.LanguageClient
 import org.eclipse.lsp4j.services.LanguageClientAware
 import org.eclipse.lsp4j.services.LanguageServer
@@ -35,6 +36,14 @@ internal class GradleLanguageServer(
         return CompletableFuture.completedFuture(result)
     }
 
+    @JsonRequest("gradle-lsp/externalDocument")
+    fun externalDocument(params: ExternalDocumentParams): CompletableFuture<ExternalDocumentContent?> =
+        CompletableFuture.completedFuture(
+            textDocuments.externalDocument(params.uri)?.let { document ->
+                ExternalDocumentContent(document.uri, document.languageId, document.text)
+            },
+        )
+
     override fun shutdown(): CompletableFuture<Any> {
         shutdownRequested.set(true)
         return CompletableFuture.completedFuture(null)
@@ -52,3 +61,13 @@ internal class GradleLanguageServer(
 
     override fun close() = textDocuments.close()
 }
+
+internal data class ExternalDocumentParams(
+    val uri: String,
+)
+
+internal data class ExternalDocumentContent(
+    val uri: String,
+    val languageId: String,
+    val text: String,
+)

@@ -4,6 +4,7 @@ import xyz.al.gradlelsp.analysis.AnalysisDocument
 
 internal data class SourceDefinition(
     val uri: String,
+    val sourceText: String,
     val startOffset: Int,
     val endOffset: Int,
 )

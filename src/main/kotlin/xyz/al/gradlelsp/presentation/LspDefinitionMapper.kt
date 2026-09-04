@@ -5,8 +5,8 @@ import org.eclipse.lsp4j.Range
 import xyz.al.gradlelsp.navigation.SourceDefinition
 
 internal object LspDefinitionMapper {
-    fun map(sourceText: String, definition: SourceDefinition): Location {
-        val lines = Utf16LineMap(sourceText)
+    fun map(definition: SourceDefinition): Location {
+        val lines = Utf16LineMap(definition.sourceText)
         return Location(
             definition.uri,
             Range(

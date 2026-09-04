@@ -103,13 +103,26 @@ internal class KotlinCompilerSemanticAnalyzer(
     }
 }
 
-private enum class KotlinGradleScriptTemplate(
+internal enum class KotlinGradleScriptTemplate(
     val fileName: String,
     val className: String,
+    val implicitReceiverClassName: String,
 ) {
-    PROJECT("build.gradle.kts", "org.gradle.kotlin.dsl.KotlinProjectScriptTemplate"),
-    SETTINGS("settings.gradle.kts", "org.gradle.kotlin.dsl.KotlinSettingsScriptTemplate"),
-    INIT("init.gradle.kts", "org.gradle.kotlin.dsl.KotlinGradleScriptTemplate"),
+    PROJECT(
+        "build.gradle.kts",
+        "org.gradle.kotlin.dsl.KotlinProjectScriptTemplate",
+        "org.gradle.api.Project",
+    ),
+    SETTINGS(
+        "settings.gradle.kts",
+        "org.gradle.kotlin.dsl.KotlinSettingsScriptTemplate",
+        "org.gradle.api.initialization.Settings",
+    ),
+    INIT(
+        "init.gradle.kts",
+        "org.gradle.kotlin.dsl.KotlinGradleScriptTemplate",
+        "org.gradle.api.invocation.Gradle",
+    ),
     ;
 
     companion object {

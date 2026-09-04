@@ -4,37 +4,96 @@ package xyz.al.gradlelsp.navigation
 
 import org.jetbrains.kotlin.com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.com.intellij.psi.util.PsiTreeUtil
+import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtNamedDeclaration
 import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.DescriptorToSourceUtils
 import xyz.al.gradlelsp.analysis.AnalysisDocument
 import xyz.al.gradlelsp.analysis.KotlinAstParser
+import xyz.al.gradlelsp.analysis.KotlinGradleScriptTemplate
+import xyz.al.gradlelsp.analysis.KotlinScriptAnalysisContext
 import xyz.al.gradlelsp.analysis.ParsedKotlinFile
+import xyz.al.gradlelsp.documents.ExternalDocumentStore
+import xyz.al.gradlelsp.gradle.GradleKotlinDslModel
+import xyz.al.gradlelsp.gradle.GradleKotlinDslModelLoader
+import xyz.al.gradlelsp.gradle.GradleKotlinDslModelProvider
+import java.net.URI
+import java.nio.file.Path
+import java.util.concurrent.atomic.AtomicBoolean
 
 internal class KotlinFileNavigationEngine(
-    private val parser: KotlinAstParser = KotlinAstParser(),
+    private val modelProvider: GradleKotlinDslModelProvider = GradleKotlinDslModelLoader(),
+    externalDocuments: ExternalDocumentStore = ExternalDocumentStore(),
+    private val localParser: KotlinAstParser = KotlinAstParser(),
 ) : DocumentNavigationEngine {
-    override fun definitions(document: AnalysisDocument, offset: Int): List<SourceDefinition> {
-        val parsedFile = parser.parse(document.fileName, document.text)
-        val target = resolveReference(parsedFile, offset) ?: declarationAt(parsedFile, offset) ?: return emptyList()
-        if (target.containingFile !== parsedFile.psi) return emptyList()
+    private val closed = AtomicBoolean(false)
+    private val modelParsers = mutableMapOf<ParserKey, KotlinAstParser>()
+    private val externalSources = KotlinExternalSourceResolver(externalDocuments)
 
-        val range = target.nameIdentifier?.textRange ?: target.textRange
-        return listOf(SourceDefinition(document.uri, range.startOffset, range.endOffset))
+    override fun definitions(document: AnalysisDocument, offset: Int): List<SourceDefinition> {
+        check(!closed.get()) { "Kotlin navigation engine is closed" }
+
+        val localFile = localParser.parse(document.fileName, document.text)
+        declarationAt(localFile, offset)?.let { declaration ->
+            return listOf(sourceDefinition(document, declaration))
+        }
+        resolveLocalReference(localFile, offset)?.let { declaration ->
+            return listOf(sourceDefinition(document, declaration))
+        }
+
+        val script = Path.of(URI.create(document.uri))
+        val model = modelProvider.modelFor(script)
+        val parser = parserFor(document.fileName, model)
+        val parsedFile = parser.parse(document.fileName, document.text)
+        val reference = referenceAt(parsedFile, offset) ?: return emptyList()
+        val descriptors = resolveDescriptors(parser, parsedFile, reference)
+        return descriptors.flatMap { descriptor ->
+            val sourceDeclaration = DescriptorToSourceUtils.descriptorToDeclaration(descriptor)
+                as? KtNamedDeclaration
+            if (sourceDeclaration?.containingFile === parsedFile.psi) {
+                listOf(sourceDefinition(document, sourceDeclaration))
+            } else {
+                externalSources.resolve(descriptor, model, parser)
+            }
+        }.distinctBy { definition ->
+            listOf(definition.uri, definition.startOffset, definition.endOffset)
+        }
     }
 
-    private fun resolveReference(file: ParsedKotlinFile, offset: Int): KtNamedDeclaration? {
-        val reference = elementsAround(file, offset)
+    private fun resolveLocalReference(
+        file: ParsedKotlinFile,
+        offset: Int,
+    ): KtNamedDeclaration? = runCatching {
+        val reference = referenceAt(file, offset) ?: return@runCatching null
+        resolveDescriptors(localParser, file, reference)
+            .singleOrNull()
+            ?.let(DescriptorToSourceUtils::descriptorToDeclaration)
+            ?.takeIf { declaration -> declaration.containingFile === file.psi }
+            as? KtNamedDeclaration
+    }.getOrNull()
+
+    private fun resolveDescriptors(
+        parser: KotlinAstParser,
+        file: ParsedKotlinFile,
+        reference: KtNameReferenceExpression,
+    ): List<DeclarationDescriptor> {
+        val context = parser.bindingContext(file)
+        val direct = context[BindingContext.REFERENCE_TARGET, reference]
+        val referenced = direct?.let(::listOf)
+            ?: context[BindingContext.AMBIGUOUS_REFERENCE_TARGET, reference].orEmpty()
+        return referenced
+            .flatMap(DescriptorToSourceUtils::getEffectiveReferencedDescriptors)
+            .distinctBy { descriptor -> CompilerDeclarationIdentity.from(descriptor) }
+    }
+
+    private fun referenceAt(file: ParsedKotlinFile, offset: Int): KtNameReferenceExpression? =
+        elementsAround(file, offset)
             .mapNotNull { element ->
                 PsiTreeUtil.getParentOfType(element, KtNameReferenceExpression::class.java, false)
             }
             .filter { containsOffset(it, offset) }
             .minByOrNull { it.textRange.length }
-            ?: return null
-        val descriptor = parser.bindingContext(file)[BindingContext.REFERENCE_TARGET, reference] ?: return null
-        return DescriptorToSourceUtils.descriptorToDeclaration(descriptor) as? KtNamedDeclaration
-    }
 
     private fun declarationAt(file: ParsedKotlinFile, offset: Int): KtNamedDeclaration? =
         elementsAround(file, offset)
@@ -59,5 +118,54 @@ internal class KotlinFileNavigationEngine(
     private fun containsOffset(reference: KtNameReferenceExpression, offset: Int): Boolean =
         offset in reference.textRange.startOffset..reference.textRange.endOffset
 
-    override fun close() = parser.close()
+    @Synchronized
+    private fun parserFor(fileName: String, model: GradleKotlinDslModel): KotlinAstParser {
+        val template = KotlinGradleScriptTemplate.forFile(fileName)
+        val key = ParserKey(
+            classPath = model.classPath.map { it.toAbsolutePath().normalize() },
+            implicitImports = model.implicitImports,
+            baseClassName = template.className,
+            implicitReceiverClassName = template.implicitReceiverClassName,
+        )
+        return modelParsers.getOrPut(key) {
+            KotlinAstParser(
+                KotlinScriptAnalysisContext(
+                    classPath = key.classPath,
+                    implicitImports = key.implicitImports,
+                    baseClassName = key.baseClassName,
+                    implicitReceiverClassName = key.implicitReceiverClassName,
+                ),
+            )
+        }
+    }
+
+    private fun sourceDefinition(
+        document: AnalysisDocument,
+        declaration: KtNamedDeclaration,
+    ): SourceDefinition {
+        val range = declaration.nameIdentifier?.textRange ?: declaration.textRange
+        return SourceDefinition(
+            document.uri,
+            document.text,
+            range.startOffset,
+            range.endOffset,
+        )
+    }
+
+    override fun close() {
+        if (closed.compareAndSet(false, true)) {
+            localParser.close()
+            synchronized(this) {
+                modelParsers.values.forEach(KotlinAstParser::close)
+                modelParsers.clear()
+            }
+        }
+    }
+
+    private data class ParserKey(
+        val classPath: List<Path>,
+        val implicitImports: List<String>,
+        val baseClassName: String,
+        val implicitReceiverClassName: String,
+    )
 }

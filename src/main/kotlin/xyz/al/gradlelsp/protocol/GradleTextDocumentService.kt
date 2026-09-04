@@ -16,6 +16,8 @@ import xyz.al.gradlelsp.analysis.DocumentAnalyzer
 import xyz.al.gradlelsp.analysis.defaultGradleAnalysisEngine
 import xyz.al.gradlelsp.documents.DocumentSnapshot
 import xyz.al.gradlelsp.documents.DocumentStore
+import xyz.al.gradlelsp.documents.ExternalDocument
+import xyz.al.gradlelsp.documents.ExternalDocumentStore
 import xyz.al.gradlelsp.navigation.DocumentNavigationEngine
 import xyz.al.gradlelsp.navigation.defaultGradleNavigationEngine
 import xyz.al.gradlelsp.presentation.LspDefinitionMapper
@@ -28,8 +30,9 @@ import java.util.concurrent.TimeUnit
 
 internal class GradleTextDocumentService(
     private val documents: DocumentStore = DocumentStore(),
+    private val externalDocuments: ExternalDocumentStore = ExternalDocumentStore(),
     private val analyzer: DocumentAnalyzer = defaultGradleAnalysisEngine(),
-    private val navigation: DocumentNavigationEngine = defaultGradleNavigationEngine(),
+    private val navigation: DocumentNavigationEngine = defaultGradleNavigationEngine(externalDocuments),
     private val logger: ServerLogger = ServerLogger.standardError(),
     private val analysisExecutor: ExecutorService = newAnalysisExecutor(),
     private val navigationExecutor: ExecutorService = newNavigationExecutor(),
@@ -63,6 +66,8 @@ internal class GradleTextDocumentService(
 
     override fun didSave(params: DidSaveTextDocumentParams) = Unit
 
+    fun externalDocument(uri: String): ExternalDocument? = externalDocuments.find(uri)
+
     override fun definition(
         params: DefinitionParams,
     ): CompletableFuture<Either<List<Location>, List<LocationLink>>> =
@@ -79,11 +84,7 @@ internal class GradleTextDocumentService(
                     )
                     if (!documents.isCurrent(snapshot)) return@supplyAsync emptyDefinitions()
 
-                    Either.forLeft(
-                        definitions
-                            .filter { it.uri == snapshot.uri }
-                            .map { LspDefinitionMapper.map(snapshot.text, it) },
-                    )
+                    Either.forLeft(definitions.map(LspDefinitionMapper::map))
                 } catch (failure: Exception) {
                     logger.log(
                         "gradle-lsp: definition failed for ${params.textDocument.uri}: " +

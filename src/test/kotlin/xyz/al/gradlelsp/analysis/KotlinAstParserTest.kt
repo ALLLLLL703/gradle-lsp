@@ -1,7 +1,9 @@
 package xyz.al.gradlelsp.analysis
 
 import org.jetbrains.kotlin.psi.KtProperty
+import xyz.al.gradlelsp.gradle.GradleKotlinDslModelLoader
 import xyz.al.gradlelsp.navigation.KotlinFileNavigationEngine
+import java.net.JarURLConnection
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -70,6 +72,105 @@ class KotlinAstParserTest {
             val localDeclaration = text.indexOf("answer", text.indexOf("fun scope"))
             val localReference = text.indexOf("answer", localDeclaration + "answer".length)
             assertEquals(localDeclaration, definitionOffset(localReference))
+        }
+    }
+
+    @Test
+    fun `external Kotlin declaration prefers attached source`() {
+        val script = Path.of("build.gradle.kts").toAbsolutePath()
+        val baseModel = GradleKotlinDslModelLoader().modelFor(script)
+        val tuplesSource = requireNotNull(
+            javaClass.classLoader.getResource("commonMain/kotlin/util/Tuples.kt"),
+        )
+        val sourceJar = Path.of((tuplesSource.openConnection() as JarURLConnection).jarFileURL.toURI())
+        val model = baseModel.copy(sourcePath = listOf(sourceJar))
+        val text = "val pair = Pair(1, 2)"
+        val document = AnalysisDocument(script.toUri().toString(), script.fileName.toString(), text)
+
+        KotlinFileNavigationEngine(modelProvider = { model }).use { navigation ->
+            val reference = text.indexOf("Pair")
+            val definition = navigation.definitions(document, reference).single()
+
+            assertTrue(definition.uri.startsWith("gradle-lsp://source/"))
+            assertTrue(definition.uri.endsWith("/Tuples.kt"))
+            assertEquals(
+                "Pair",
+                definition.sourceText.substring(definition.startOffset, definition.endOffset),
+            )
+            assertTrue(definition.sourceText.contains("public data class Pair"))
+        }
+    }
+
+    @Test
+    fun `external Kotlin declaration falls back to a metadata stub`() {
+        val script = Path.of("build.gradle.kts").toAbsolutePath()
+        val model = GradleKotlinDslModelLoader().modelFor(script).copy(sourcePath = emptyList())
+        val text = """
+            import org.gradle.kotlin.dsl.KotlinProjectScriptTemplate
+
+            val templateType = KotlinProjectScriptTemplate::class
+        """.trimIndent()
+        val document = AnalysisDocument(script.toUri().toString(), script.fileName.toString(), text)
+
+        KotlinFileNavigationEngine(modelProvider = { model }).use { navigation ->
+            val reference = text.indexOf("KotlinProjectScriptTemplate", text.indexOf("val templateType"))
+            val definition = navigation.definitions(document, reference).single()
+
+            assertTrue(definition.uri.startsWith("gradle-lsp://source/"))
+            assertTrue(definition.uri.endsWith("/KotlinProjectScriptTemplate.decompiled.kt"))
+            assertEquals(
+                "KotlinProjectScriptTemplate",
+                definition.sourceText.substring(definition.startOffset, definition.endOffset),
+            )
+            assertTrue(definition.sourceText.contains("class KotlinProjectScriptTemplate"))
+        }
+    }
+
+    @Test
+    fun `external Java declaration prefers attached source`() {
+        val script = Path.of("build.gradle.kts").toAbsolutePath()
+        val model = GradleKotlinDslModelLoader().modelFor(script)
+        val text = """
+            import com.google.gson.Gson
+
+            val json = Gson().toJson("Gradle")
+        """.trimIndent()
+        val document = AnalysisDocument(script.toUri().toString(), script.fileName.toString(), text)
+
+        KotlinFileNavigationEngine(modelProvider = { model }).use { navigation ->
+            val reference = text.indexOf("toJson")
+            val definition = navigation.definitions(document, reference).single()
+
+            assertTrue(definition.uri.startsWith("gradle-lsp://source/"))
+            assertTrue(definition.uri.endsWith("/Gson.java"))
+            assertEquals(
+                "toJson",
+                definition.sourceText.substring(definition.startOffset, definition.endOffset),
+            )
+            assertTrue(definition.sourceText.contains("public String toJson(Object src)"))
+        }
+    }
+
+    @Test
+    fun `external Java declaration falls back to JD-Core`() {
+        val script = Path.of("build.gradle.kts").toAbsolutePath().normalize()
+        val text = """
+            repositories {
+                mavenCentral()
+            }
+        """.trimIndent()
+        val document = AnalysisDocument(script.toUri().toString(), script.fileName.toString(), text)
+        val model = GradleKotlinDslModelLoader().modelFor(script).copy(sourcePath = emptyList())
+        KotlinFileNavigationEngine(modelProvider = { model }).use { navigation ->
+            val reference = text.indexOf("mavenCentral")
+            val definition = navigation.definitions(document, reference + 1).single()
+
+            assertTrue(definition.uri.startsWith("gradle-lsp://source/"))
+            assertTrue(definition.uri.endsWith("/RepositoryHandler.java"))
+            assertEquals(
+                "mavenCentral",
+                definition.sourceText.substring(definition.startOffset, definition.endOffset),
+            )
         }
     }
 
