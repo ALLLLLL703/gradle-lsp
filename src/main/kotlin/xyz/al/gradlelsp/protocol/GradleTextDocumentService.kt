@@ -8,6 +8,8 @@ import org.eclipse.lsp4j.DidOpenTextDocumentParams
 import org.eclipse.lsp4j.DidSaveTextDocumentParams
 import org.eclipse.lsp4j.DocumentSymbol
 import org.eclipse.lsp4j.DocumentSymbolParams
+import org.eclipse.lsp4j.Hover
+import org.eclipse.lsp4j.HoverParams
 import org.eclipse.lsp4j.ImplementationParams
 import org.eclipse.lsp4j.Location
 import org.eclipse.lsp4j.LocationLink
@@ -32,6 +34,7 @@ import xyz.al.gradlelsp.navigation.defaultGradleNavigationEngine
 import xyz.al.gradlelsp.presentation.LspDefinitionMapper
 import xyz.al.gradlelsp.presentation.LspDocumentSymbolMapper
 import xyz.al.gradlelsp.presentation.LspDiagnosticMapper
+import xyz.al.gradlelsp.presentation.LspHoverMapper
 import xyz.al.gradlelsp.presentation.Utf16LineMap
 import xyz.al.gradlelsp.symbols.DocumentSymbolEngine
 import xyz.al.gradlelsp.symbols.defaultGradleDocumentSymbolEngine
@@ -135,6 +138,33 @@ internal class GradleTextDocumentService(
                             (failure.message ?: failure::class.java.simpleName),
                     )
                     emptyDefinitions()
+                }
+            },
+            navigationExecutor,
+        )
+    }
+
+    override fun hover(params: HoverParams): CompletableFuture<Hover> {
+        val snapshot = documents.current(params.textDocument.uri)
+            ?: return CompletableFuture.completedFuture(LspHoverMapper.empty())
+        return supplyAsync(
+            {
+                try {
+                    val offset = Utf16LineMap(snapshot.text).offsetAt(params.position)
+                        ?: return@supplyAsync LspHoverMapper.empty()
+                    val hover = navigation.hover(
+                        AnalysisDocument(snapshot.uri, snapshot.fileName, snapshot.text),
+                        offset,
+                    ) ?: return@supplyAsync LspHoverMapper.empty()
+                    if (!documents.isCurrent(snapshot)) return@supplyAsync LspHoverMapper.empty()
+
+                    LspHoverMapper.map(snapshot.text, hover)
+                } catch (failure: Exception) {
+                    logger.log(
+                        "gradle-lsp: hover failed for ${params.textDocument.uri}: " +
+                            (failure.message ?: failure::class.java.simpleName),
+                    )
+                    LspHoverMapper.empty()
                 }
             },
             navigationExecutor,

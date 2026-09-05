@@ -4,6 +4,7 @@ package xyz.al.gradlelsp.navigation
 
 import org.jetbrains.kotlin.com.intellij.openapi.util.TextRange
 import org.jetbrains.kotlin.com.intellij.psi.PsiElement
+import org.jetbrains.kotlin.com.intellij.psi.PsiJavaDocumentedElement
 import org.jetbrains.kotlin.com.intellij.psi.util.PsiTreeUtil
 import org.jetbrains.kotlin.descriptors.CallableDescriptor
 import org.jetbrains.kotlin.descriptors.CallableMemberDescriptor
@@ -27,6 +28,7 @@ import org.jetbrains.kotlin.psi.KtPrimaryConstructor
 import org.jetbrains.kotlin.psi.KtPropertyAccessor
 import org.jetbrains.kotlin.psi.KtSecondaryConstructor
 import org.jetbrains.kotlin.psi.KtTypeReference
+import org.jetbrains.kotlin.renderer.DescriptorRenderer
 import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.DescriptorEquivalenceForOverrides
 import org.jetbrains.kotlin.resolve.DescriptorToSourceUtils
@@ -53,7 +55,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 internal class KotlinFileNavigationEngine(
     private val modelProvider: GradleKotlinDslModelProvider = GradleKotlinDslModelLoader(),
-    externalDocuments: ExternalDocumentStore = ExternalDocumentStore(),
+    private val externalDocuments: ExternalDocumentStore = ExternalDocumentStore(),
     private val workspaceDocuments: WorkspaceDocumentSource = GradleWorkspaceDocumentSource(DocumentStore()),
     private val localParser: KotlinAstParser = KotlinAstParser(),
 ) : DocumentNavigationEngine {
@@ -259,6 +261,125 @@ internal class KotlinFileNavigationEngine(
             )
         }
     }
+
+    override fun hover(document: AnalysisDocument, offset: Int): SourceHover? {
+        check(!closed.get()) { "Kotlin navigation engine is closed" }
+
+        val localAnalysis = runCatching {
+            targetAnalysis(localParser, document, offset, usesGradleModel = false, model = null)
+        }.getOrNull()
+        if (localAnalysis != null && localAnalysis.targets.isNotEmpty()) {
+            return sourceHover(localAnalysis, offset)
+        }
+
+        val script = Path.of(URI.create(document.uri))
+        val model = modelProvider.modelFor(script)
+        return withPinnedParser(document.fileName, model) { parser ->
+            val analysis = targetAnalysis(parser, document, offset, usesGradleModel = true, model = model)
+            sourceHover(analysis, offset)
+        }
+    }
+
+    private fun sourceHover(analysis: TargetAnalysis, offset: Int): SourceHover? {
+        val target = analysis.targets.firstOrNull() ?: return null
+        val range = hoverRangeAt(analysis.file, offset) ?: return null
+        val signature = runCatching {
+            renderHoverSignature(target.descriptor)
+        }.getOrNull()?.takeIf(String::isNotBlank) ?: return null
+        val localSource = target.source?.definition
+        val externalSource = if (localSource == null) {
+            runCatching { resolveExternalHoverSource(analysis, target.descriptor) }.getOrNull()
+        } else {
+            null
+        }
+        val source = localSource ?: externalSource?.definition
+        val documentation = runCatching {
+            if (localSource != null) {
+                kotlinDocumentation(analysis.file, localSource)
+            } else {
+                externalSource?.let { resolved ->
+                    externalDocumentation(resolved.definition, resolved.parser)
+                }
+            }
+        }.getOrNull()
+        return SourceHover(
+            signature = signature,
+            documentation = documentation,
+            source = source,
+            startOffset = range.startOffset,
+            endOffset = range.endOffset,
+        )
+    }
+
+    private fun renderHoverSignature(descriptor: DeclarationDescriptor): String {
+        val declaration = descriptor.navigationDeclaration()
+        return if (declaration is ConstructorDescriptor) {
+            HOVER_CONSTRUCTOR_RENDERER.render(declaration)
+        } else {
+            HOVER_RENDERER.render(declaration)
+        }
+    }
+
+    private fun resolveExternalHoverSource(
+        analysis: TargetAnalysis,
+        descriptor: DeclarationDescriptor,
+    ): ResolvedHoverSource? {
+        val model = analysis.model ?: run {
+            val script = Path.of(URI.create(analysis.document.uri))
+            modelProvider.modelFor(script)
+        }
+        val parser = if (analysis.model != null) {
+            analysis.parser
+        } else {
+            parserFor(analysis.document.fileName, model)
+        }
+        val definition = externalSources.resolve(descriptor, model, parser).firstOrNull() ?: return null
+        return ResolvedHoverSource(definition, parser)
+    }
+
+    private fun kotlinDocumentation(
+        file: ParsedKotlinFile,
+        source: SourceDefinition,
+    ): String? = kotlinDeclarationAt(file, source)?.let(SourceDocumentation::kotlin)
+
+    private fun externalDocumentation(
+        source: SourceDefinition,
+        parser: KotlinAstParser,
+    ): String? {
+        val external = externalDocuments.find(source.uri) ?: return null
+        val fileName = URI.create(source.uri).path.substringAfterLast('/').ifBlank { "external-source" }
+        return when (external.languageId) {
+            "kotlin" -> {
+                val parsed = parser.parse(fileName, external.text)
+                kotlinDeclarationAt(parsed, source)?.let(SourceDocumentation::kotlin)
+            }
+            "java" -> {
+                val parsed = parser.parseJava(fileName, external.text) ?: return null
+                val declaration = sequenceOf(source.startOffset, source.startOffset - 1)
+                    .distinct()
+                    .filter { offset -> offset in 0 until parsed.textLength }
+                    .mapNotNull(parsed::findElementAt)
+                    .flatMap { element -> generateSequence(element) { current -> current.parent } }
+                    .filterIsInstance<PsiJavaDocumentedElement>()
+                    .firstOrNull()
+                declaration?.let(SourceDocumentation::java)
+            }
+            else -> null
+        }
+    }
+
+    private fun kotlinDeclarationAt(
+        file: ParsedKotlinFile,
+        source: SourceDefinition,
+    ): KtDeclaration? = elementsAround(file, source.startOffset)
+        .flatMap { element -> generateSequence(element) { current -> current.parent } }
+        .filterIsInstance<KtDeclaration>()
+        .filter { declaration ->
+            declarationIdentifierRange(declaration)?.let { range ->
+                range.startOffset == source.startOffset && range.endOffset == source.endOffset
+            } == true
+        }
+        .minByOrNull { declaration -> declaration.textRange.length }
 
     private fun implementationTargets(analysis: TargetAnalysis): List<ImplementationTarget> =
         analysis.targets.mapNotNull { target ->
@@ -622,6 +743,15 @@ internal class KotlinFileNavigationEngine(
             }
     }
 
+    private fun hoverRangeAt(file: ParsedKotlinFile, offset: Int): TextRange? =
+        semanticDeclarationAt(file, offset)?.let(::declarationIdentifierRange)
+            ?: arrayAccessAt(file, offset)?.let { reference ->
+                listOfNotNull(reference.leftBracket, reference.rightBracket)
+                    .firstOrNull { bracket -> offset in bracket.textRange.startOffset..bracket.textRange.endOffset }
+                    ?.textRange
+            }
+            ?: referenceAt(file, offset)?.textRange
+
     private fun arrayAccessAt(file: ParsedKotlinFile, offset: Int): KtArrayAccessExpression? =
         elementsAround(file, offset)
             .mapNotNull { element ->
@@ -792,6 +922,11 @@ internal class KotlinFileNavigationEngine(
         }
     }
 
+    private data class ResolvedHoverSource(
+        val definition: SourceDefinition,
+        val parser: KotlinAstParser,
+    )
+
     private data class ReferenceOccurrence(
         val range: TextRange,
         val descriptors: List<DeclarationDescriptor>,
@@ -851,6 +986,14 @@ internal class KotlinFileNavigationEngine(
     )
 
     private companion object {
+        val HOVER_RENDERER = DescriptorRenderer.FQ_NAMES_IN_TYPES.withOptions {
+            withDefinedIn = false
+        }
+        val HOVER_CONSTRUCTOR_RENDERER = HOVER_RENDERER.withOptions {
+            secondaryConstructorsAsPrimary = true
+            renderConstructorKeyword = true
+        }
+
         const val MAXIMUM_MODEL_PARSERS = 1
     }
 }

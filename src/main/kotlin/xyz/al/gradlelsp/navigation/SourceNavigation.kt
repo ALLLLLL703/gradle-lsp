@@ -9,6 +9,14 @@ internal data class SourceDefinition(
     val endOffset: Int,
 )
 
+internal data class SourceHover(
+    val signature: String,
+    val documentation: String?,
+    val source: SourceDefinition?,
+    val startOffset: Int,
+    val endOffset: Int,
+)
+
 internal interface DocumentNavigationEngine : AutoCloseable {
     fun definitions(document: AnalysisDocument, offset: Int): List<SourceDefinition>
 
@@ -24,6 +32,8 @@ internal interface DocumentNavigationEngine : AutoCloseable {
     ): List<SourceDefinition> = emptyList()
 
     fun implementations(document: AnalysisDocument, offset: Int): List<SourceDefinition> = emptyList()
+
+    fun hover(document: AnalysisDocument, offset: Int): SourceHover? = null
 
     override fun close() = Unit
 }

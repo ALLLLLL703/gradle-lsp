@@ -96,12 +96,13 @@ function withDocument(position) {
 }
 
 try {
-  await request("initialize", {
+  const initialize = await request("initialize", {
     processId: process.pid,
     rootUri,
     workspaceFolders: [{ uri: rootUri, name: "gradle-lsp" }],
     capabilities: {},
   });
+  if (initialize.capabilities.hoverProvider !== true) throw new Error("Server did not advertise hover support");
   notify("initialized", {});
   notify("textDocument/didOpen", {
     textDocument: {
@@ -135,6 +136,20 @@ try {
     if (!hasExternalDefinition) throw new Error("Gradle implementation did not resolve to external source");
   }
 
+  const externalHoverStartedAt = performance.now();
+  const externalHover = await withTimeout(
+    request("textDocument/hover", withDocument(positionOf("implementation("))),
+    30_000,
+    "Gradle implementation hover",
+  );
+  const externalHoverMs = Math.round(performance.now() - externalHoverStartedAt);
+  const hoverContents = externalHover?.contents;
+  const hasKotlinSignature = Array.isArray(hoverContents) && hoverContents.some((content) =>
+    content?.language === "kotlin" && content.value.includes("DependencyHandler.implementation"));
+  const hasKDoc = Array.isArray(hoverContents) && hoverContents.some((content) =>
+    typeof content === "string" && content.includes("Adds a dependency to the 'implementation' configuration."));
+  if (!hasKotlinSignature || !hasKDoc) throw new Error("Gradle implementation hover is incomplete");
+
   await request("textDocument/declaration", withDocument(positionOf("kotlinStdlibSources", 2)));
   await request("textDocument/typeDefinition", withDocument(positionOf("configurations")));
   await request("textDocument/references", {
@@ -155,6 +170,7 @@ try {
     threads,
     maximumRssKiB,
     externalDefinitionDurationsMs,
+    externalHoverMs,
   }));
   if (peakRssKiB >= maximumRssKiB) {
     throw new Error(`Peak RSS ${peakRssKiB} KiB exceeded ${maximumRssKiB} KiB`);

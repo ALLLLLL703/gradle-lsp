@@ -12,6 +12,7 @@ import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class KotlinAstParserTest {
@@ -132,6 +133,41 @@ class KotlinAstParserTest {
                 definition.sourceText.substring(definition.startOffset, definition.endOffset),
             )
             assertTrue(definition.sourceText.contains("public data class Pair"))
+
+            val hover = assertNotNull(navigation.hover(document, reference))
+            val documentation = assertNotNull(hover.documentation)
+            assertTrue(hover.signature.contains("Pair"), hover.signature)
+            assertTrue(documentation.contains("Represents a generic pair of two values"), documentation)
+            assertTrue(assertNotNull(hover.source).uri.endsWith("/Tuples.kt"))
+        }
+    }
+
+    @Test
+    fun `hover renders exact external Gradle KDoc after PSI recovery`() {
+        val script = Path.of("build.gradle.kts").toAbsolutePath().normalize()
+        val model = GradleKotlinDslModelLoader().modelFor(script)
+        val text = """
+            val broken =
+            val recovered = 1
+            dependencies {
+                implementation("org.eclipse.lsp4j:org.eclipse.lsp4j:1.0.0")
+            }
+        """.trimIndent()
+        val document = AnalysisDocument(script.toUri().toString(), script.fileName.toString(), text)
+
+        KotlinFileNavigationEngine(modelProvider = { model }).use { navigation ->
+            val reference = text.indexOf("implementation")
+            val hover = assertNotNull(navigation.hover(document, reference))
+            val documentation = assertNotNull(hover.documentation)
+
+            assertTrue(hover.signature.contains("DependencyHandler.implementation"), hover.signature)
+            assertTrue(
+                documentation.contains("Adds a dependency to the 'implementation' configuration."),
+                documentation,
+            )
+            assertTrue(documentation.contains("**dependencyNotation**"))
+            assertTrue(documentation.contains("**Returns:**"))
+            assertTrue(assertNotNull(hover.source).uri.endsWith("/ImplementationConfigurationAccessors.kt"))
         }
     }
 
@@ -267,6 +303,14 @@ class KotlinAstParserTest {
                 definition.sourceText.substring(definition.startOffset, definition.endOffset),
             )
             assertTrue(definition.sourceText.contains("public String toJson(Object src)"))
+
+            val hover = assertNotNull(navigation.hover(document, reference))
+            val documentation = assertNotNull(hover.documentation)
+            assertTrue(hover.signature.contains("toJson"), hover.signature)
+            assertTrue(documentation.contains("serializes the specified object"), documentation)
+            assertTrue(documentation.contains("**src**"))
+            assertTrue(documentation.contains("**Returns:**"))
+            assertTrue(assertNotNull(hover.source).uri.endsWith("/Gson.java"))
         }
     }
 

@@ -47,6 +47,9 @@ internal class GradleNavigationEngine(
     override fun implementations(document: AnalysisDocument, offset: Int): List<SourceDefinition> =
         engineFor(document)?.implementations(document, offset).orEmpty()
 
+    override fun hover(document: AnalysisDocument, offset: Int): SourceHover? =
+        engineFor(document)?.hover(document, offset)
+
     private fun engineFor(document: AnalysisDocument): DocumentNavigationEngine? {
         check(!closed.get()) { "Gradle navigation engine is closed" }
         return synchronized(this) {

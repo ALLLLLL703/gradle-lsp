@@ -7,6 +7,7 @@ import org.eclipse.lsp4j.DidChangeTextDocumentParams
 import org.eclipse.lsp4j.DidOpenTextDocumentParams
 import org.eclipse.lsp4j.DocumentSymbolCapabilities
 import org.eclipse.lsp4j.DocumentSymbolParams
+import org.eclipse.lsp4j.HoverParams
 import org.eclipse.lsp4j.ImplementationParams
 import org.eclipse.lsp4j.InitializeParams
 import org.eclipse.lsp4j.Position
@@ -28,6 +29,7 @@ import xyz.al.gradlelsp.documents.DocumentStore
 import xyz.al.gradlelsp.documents.ExternalDocumentStore
 import xyz.al.gradlelsp.navigation.DocumentNavigationEngine
 import xyz.al.gradlelsp.navigation.SourceDefinition
+import xyz.al.gradlelsp.navigation.SourceHover
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CopyOnWriteArrayList
@@ -663,6 +665,90 @@ class GradleDefinitionIntegrationTest {
             ).join().left.single()
             assertEquals(Position(0, 6), expandedAliasType.range.start)
             assertEquals(Position(0, 12), expandedAliasType.range.end)
+        }
+    }
+
+    @Test
+    fun `hover exposes a Kotlin signature KDoc source and UTF-16 range after PSI recovery`() {
+        val text = """
+            /**
+             * Doubles a value.
+             *
+             * @param value the input value
+             * @return the doubled value
+             */
+            fun twice(value: Int): Int = value * 2
+            val broken =
+            val marker = "😀"; twice(21)
+        """.trimIndent()
+        val script = Path.of("build.gradle.kts").toAbsolutePath().normalize()
+        val uri = script.toUri().toString()
+        val documents = DocumentStore().apply { open(uri, 1, text) }
+        val textDocuments = GradleTextDocumentService(documents = documents, analyzer = noAnalysis())
+
+        GradleLanguageServer(textDocuments = textDocuments).use { server ->
+            val capabilities = server.initialize(InitializeParams()).join().capabilities
+            assertTrue(capabilities.hoverProvider.left)
+
+            val hover = textDocuments.hover(
+                HoverParams(TextDocumentIdentifier(uri), Position(8, 20)),
+            ).join()
+            val contents = hover.contents.left
+            val signature = contents.first().right
+
+            assertEquals("kotlin", signature.language)
+            assertTrue(signature.value.contains("fun twice(value: kotlin.Int): kotlin.Int"), signature.value)
+            assertEquals(
+                """
+                    Doubles a value.
+
+                    * **Parameters:**
+                      * **value** the input value
+
+                    * **Returns:**
+                      * the doubled value
+                """.trimIndent(),
+                contents[1].left,
+            )
+            assertTrue(contents[2].left.startsWith("Source: *[build.gradle.kts](file:"))
+            assertEquals(Position(8, 19), hover.range.start)
+            assertEquals(Position(8, 24), hover.range.end)
+        }
+    }
+
+    @Test
+    fun `stale hover is discarded after the document changes`() {
+        val text = "val answer = 42\nanswer\n"
+        val replacement = "val answer = 43\nanswer\n"
+        val script = Path.of("build.gradle.kts").toAbsolutePath().normalize()
+        val uri = script.toUri().toString()
+        val documents = DocumentStore().apply { open(uri, 1, text) }
+        val enteredNavigation = CountDownLatch(1)
+        val continueNavigation = CountDownLatch(1)
+        val navigation = object : DocumentNavigationEngine {
+            override fun definitions(document: AnalysisDocument, offset: Int): List<SourceDefinition> = emptyList()
+
+            override fun hover(document: AnalysisDocument, offset: Int): SourceHover {
+                enteredNavigation.countDown()
+                check(continueNavigation.await(5, TimeUnit.SECONDS))
+                return SourceHover("val answer: kotlin.Int", null, null, 16, 22)
+            }
+        }
+        val textDocuments = GradleTextDocumentService(
+            documents = documents,
+            analyzer = noAnalysis(),
+            navigation = navigation,
+        )
+
+        textDocuments.use {
+            val response = textDocuments.hover(
+                HoverParams(TextDocumentIdentifier(uri), Position(1, 1)),
+            )
+            assertTrue(enteredNavigation.await(5, TimeUnit.SECONDS))
+            documents.replace(uri, 2, replacement)
+            continueNavigation.countDown()
+
+            assertTrue(response.join().contents.left.isEmpty())
         }
     }
 

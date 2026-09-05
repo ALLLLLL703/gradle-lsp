@@ -32,6 +32,7 @@ internal class GradleLanguageServer(
         capabilities.setTextDocumentSync(TextDocumentSyncKind.Full)
         capabilities.setDeclarationProvider(true)
         capabilities.setDefinitionProvider(true)
+        capabilities.setHoverProvider(true)
         capabilities.setTypeDefinitionProvider(true)
         capabilities.setImplementationProvider(true)
         capabilities.setReferencesProvider(true)
