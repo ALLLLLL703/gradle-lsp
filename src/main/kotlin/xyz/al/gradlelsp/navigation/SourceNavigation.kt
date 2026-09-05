@@ -1,6 +1,7 @@
 package xyz.al.gradlelsp.navigation
 
 import xyz.al.gradlelsp.analysis.AnalysisDocument
+import xyz.al.gradlelsp.completion.DocumentCompletionEngine
 
 internal data class SourceDefinition(
     val uri: String,
@@ -17,7 +18,7 @@ internal data class SourceHover(
     val endOffset: Int,
 )
 
-internal interface DocumentNavigationEngine : AutoCloseable {
+internal interface DocumentNavigationEngine : DocumentCompletionEngine, AutoCloseable {
     fun definitions(document: AnalysisDocument, offset: Int): List<SourceDefinition>
 
     fun declarations(document: AnalysisDocument, offset: Int): List<SourceDefinition> =

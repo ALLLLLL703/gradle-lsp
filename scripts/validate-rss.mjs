@@ -103,6 +103,9 @@ try {
     capabilities: {},
   });
   if (initialize.capabilities.hoverProvider !== true) throw new Error("Server did not advertise hover support");
+  if (!initialize.capabilities.completionProvider?.triggerCharacters?.includes(".")) {
+    throw new Error("Server did not advertise import completion support");
+  }
   notify("initialized", {});
   notify("textDocument/didOpen", {
     textDocument: {
@@ -158,6 +161,39 @@ try {
   });
   await request("textDocument/implementation", withDocument(positionOf("mavenCentral")));
 
+  const importCompletionDurationsMs = [];
+  let version = 1;
+  for (const [importPath, expectedPackage, expectedInsertion] of [
+    ["", "java", "java."],
+    ["org.gr", "org.gradle", "gradle."],
+    ["org.gradle.", "org.gradle.api", "api."],
+    ["kotlin.col", "kotlin.collections", "collections."],
+    ["java.ut", "java.util", "util."],
+  ]) {
+    const importLine = `/* 😀 */ import ${importPath}`;
+    notify("textDocument/didChange", {
+      textDocument: { uri: scriptUri, version: ++version },
+      contentChanges: [{ text: `${importLine}\n${scriptText}\nval broken =` }],
+    });
+    const startedAt = performance.now();
+    const completions = await withTimeout(
+      request("textDocument/completion", withDocument({ line: 0, character: importLine.length })),
+      30_000,
+      `Import package completion for ${importPath}`,
+    );
+    importCompletionDurationsMs.push(Math.round(performance.now() - startedAt));
+    const candidate = completions?.items?.find((item) => item.detail === `(package) ${expectedPackage}`);
+    if (candidate?.kind !== 9 || candidate.textEdit?.newText !== expectedInsertion) {
+      throw new Error(`Missing package completion for ${expectedPackage}: ${JSON.stringify(completions)}`);
+    }
+    const range = candidate.textEdit.range;
+    if (range.start.line !== 0 || range.end.line !== 0 || range.end.character !== importLine.length) {
+      throw new Error(`Invalid import completion range: ${JSON.stringify(range)}`);
+    }
+    const expectedStart = importLine.length - (importPath.split(".").at(-1)?.length ?? 0);
+    if (range.start.character !== expectedStart) throw new Error("Import completion did not replace only the current UTF-16 segment");
+  }
+
   const processStatus = await readFile(`/proc/${server.pid}/status`, "utf8");
   const currentRssKiB = Number(/^VmRSS:\s+(\d+)\s+kB$/m.exec(processStatus)?.[1]);
   const peakRssKiB = Number(/^VmHWM:\s+(\d+)\s+kB$/m.exec(processStatus)?.[1]);
@@ -171,6 +207,7 @@ try {
     maximumRssKiB,
     externalDefinitionDurationsMs,
     externalHoverMs,
+    importCompletionDurationsMs,
   }));
   if (peakRssKiB >= maximumRssKiB) {
     throw new Error(`Peak RSS ${peakRssKiB} KiB exceeded ${maximumRssKiB} KiB`);

@@ -1,5 +1,6 @@
 package xyz.al.gradlelsp.protocol
 
+import org.eclipse.lsp4j.CompletionOptions
 import org.eclipse.lsp4j.InitializeParams
 import org.eclipse.lsp4j.InitializeResult
 import org.eclipse.lsp4j.ServerCapabilities
@@ -33,6 +34,7 @@ internal class GradleLanguageServer(
         capabilities.setDeclarationProvider(true)
         capabilities.setDefinitionProvider(true)
         capabilities.setHoverProvider(true)
+        capabilities.completionProvider = CompletionOptions(false, listOf("."))
         capabilities.setTypeDefinitionProvider(true)
         capabilities.setImplementationProvider(true)
         capabilities.setReferencesProvider(true)

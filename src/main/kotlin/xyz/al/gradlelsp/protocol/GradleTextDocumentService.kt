@@ -1,5 +1,8 @@
 package xyz.al.gradlelsp.protocol
 
+import org.eclipse.lsp4j.CompletionItem
+import org.eclipse.lsp4j.CompletionList
+import org.eclipse.lsp4j.CompletionParams
 import org.eclipse.lsp4j.DeclarationParams
 import org.eclipse.lsp4j.DidChangeTextDocumentParams
 import org.eclipse.lsp4j.DefinitionParams
@@ -31,6 +34,7 @@ import xyz.al.gradlelsp.documents.ExternalDocumentStore
 import xyz.al.gradlelsp.documents.GradleWorkspaceDocumentSource
 import xyz.al.gradlelsp.navigation.DocumentNavigationEngine
 import xyz.al.gradlelsp.navigation.defaultGradleNavigationEngine
+import xyz.al.gradlelsp.presentation.LspCompletionMapper
 import xyz.al.gradlelsp.presentation.LspDefinitionMapper
 import xyz.al.gradlelsp.presentation.LspDocumentSymbolMapper
 import xyz.al.gradlelsp.presentation.LspDiagnosticMapper
@@ -143,6 +147,37 @@ internal class GradleTextDocumentService(
             navigationExecutor,
         )
     }
+
+    override fun completion(params: CompletionParams): CompletableFuture<Either<List<CompletionItem>, CompletionList>> {
+        val snapshot = documents.current(params.textDocument.uri)
+            ?: return CompletableFuture.completedFuture(emptyCompletions())
+        return supplyAsync(
+            {
+                try {
+                    if (!documents.isCurrent(snapshot)) return@supplyAsync emptyCompletions()
+                    val offset = Utf16LineMap(snapshot.text).offsetAt(params.position)
+                        ?: return@supplyAsync emptyCompletions()
+                    val completions = navigation.completeImports(
+                        AnalysisDocument(snapshot.uri, snapshot.fileName, snapshot.text),
+                        offset,
+                    )
+                    if (!documents.isCurrent(snapshot)) return@supplyAsync emptyCompletions()
+
+                    Either.forRight(LspCompletionMapper.map(snapshot.text, completions))
+                } catch (failure: Exception) {
+                    logger.log(
+                        "gradle-lsp: import completion failed for ${snapshot.uri}: " +
+                            (failure.message ?: failure::class.java.simpleName),
+                    )
+                    emptyCompletions()
+                }
+            },
+            navigationExecutor,
+        )
+    }
+
+    private fun emptyCompletions(): Either<List<CompletionItem>, CompletionList> =
+        Either.forRight(CompletionList(false, emptyList()))
 
     override fun hover(params: HoverParams): CompletableFuture<Hover> {
         val snapshot = documents.current(params.textDocument.uri)

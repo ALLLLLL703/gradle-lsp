@@ -12,10 +12,12 @@ import org.jetbrains.kotlin.cli.jvm.compiler.TopDownAnalyzerFacadeForJVM
 import org.jetbrains.kotlin.cli.jvm.config.addJvmClasspathRoots
 import org.jetbrains.kotlin.com.intellij.openapi.util.Disposer
 import org.jetbrains.kotlin.com.intellij.lang.java.JavaLanguage
+import org.jetbrains.kotlin.com.intellij.psi.impl.PsiElementFinderImpl
 import org.jetbrains.kotlin.com.intellij.psi.PsiErrorElement
 import org.jetbrains.kotlin.com.intellij.psi.PsiFileFactory
 import org.jetbrains.kotlin.com.intellij.psi.PsiJavaFile
 import org.jetbrains.kotlin.com.intellij.psi.PsiWhiteSpace
+import org.jetbrains.kotlin.com.intellij.psi.search.GlobalSearchScope
 import org.jetbrains.kotlin.com.intellij.psi.util.PsiTreeUtil
 import org.jetbrains.kotlin.compiler.plugin.CompilerPluginRegistrar
 import org.jetbrains.kotlin.compiler.plugin.ComponentRegistrar
@@ -23,6 +25,7 @@ import org.jetbrains.kotlin.config.CommonConfigurationKeys
 import org.jetbrains.kotlin.config.CompilerConfiguration
 import org.jetbrains.kotlin.config.JVMConfigurationKeys
 import org.jetbrains.kotlin.config.JvmTarget
+import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtPsiFactory
 import org.jetbrains.kotlin.resolve.BindingContext
@@ -150,6 +153,17 @@ internal class KotlinAstParser(
         check(!closed.get()) { "Kotlin AST parser is closed" }
         return PsiFileFactory.getInstance(environment.project)
             .createFileFromText(fileName, JavaLanguage.INSTANCE, text) as? PsiJavaFile
+    }
+
+    @Synchronized
+    fun subPackages(parent: FqName): List<FqName> {
+        check(!closed.get()) { "Kotlin AST parser is closed" }
+        val scope = GlobalSearchScope.allScope(environment.project)
+        // Only classpath PSI packages: the general facade also calls Kotlin light-class finders,
+        // which require a fully analysed module and are unnecessary for import path completion.
+        val finder = PsiElementFinderImpl(environment.project)
+        val psiPackage = finder.findPackage(parent.asString()) ?: return emptyList()
+        return finder.getSubPackages(psiPackage, scope).map { child -> FqName(child.qualifiedName) }
     }
 
     @Synchronized

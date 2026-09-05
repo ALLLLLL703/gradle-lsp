@@ -2,6 +2,7 @@ package xyz.al.gradlelsp.navigation
 
 import xyz.al.gradlelsp.analysis.AnalysisDocument
 import xyz.al.gradlelsp.analysis.GradleDsl
+import xyz.al.gradlelsp.completion.SourceCompletions
 import xyz.al.gradlelsp.documents.DocumentStore
 import xyz.al.gradlelsp.documents.ExternalDocumentStore
 import xyz.al.gradlelsp.documents.GradleWorkspaceDocumentSource
@@ -46,6 +47,9 @@ internal class GradleNavigationEngine(
 
     override fun implementations(document: AnalysisDocument, offset: Int): List<SourceDefinition> =
         engineFor(document)?.implementations(document, offset).orEmpty()
+
+    override fun completeImports(document: AnalysisDocument, offset: Int): SourceCompletions =
+        engineFor(document)?.completeImports(document, offset) ?: SourceCompletions.EMPTY
 
     override fun hover(document: AnalysisDocument, offset: Int): SourceHover? =
         engineFor(document)?.hover(document, offset)
