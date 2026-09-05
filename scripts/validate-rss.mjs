@@ -234,6 +234,39 @@ try {
     throw new Error(`Invalid import keyword completion: ${JSON.stringify(keywordCompletion)}`);
   }
 
+  const semanticCompletionDurationsMs = [];
+  for (const [before, after, expected, kind] of [
+    ["dependencies { impl", "ementation\nval broken =\n", "implementation", 3],
+    ["tasks.reg", "", "register", 2],
+    ["repositories { mav", " }", "mavenCentral", 2],
+    ["project.na", "", "name", 10],
+    ["val completionLocal = 42\n/* 😀 */ completionL", "ocal", "completionLocal", 10],
+    ["fun completionSmart(value: Any) { if (value is String) value.sub", " }", "substring", 3],
+    ["fun <T> List<T>.completionFirst(): T = first()\nlistOf(\"hi\").completionF", "", "completionFirst", 2],
+  ]) {
+    const text = `${scriptText}\n${before}${after}`;
+    const prefixLines = `${scriptText}\n${before}`.split("\n");
+    notify("textDocument/didChange", {
+      textDocument: { uri: scriptUri, version: ++version },
+      contentChanges: [{ text }],
+    });
+    const startedAt = performance.now();
+    const result = await withTimeout(
+      request("textDocument/completion", withDocument({ line: prefixLines.length - 1, character: prefixLines.at(-1).length })),
+      30_000,
+      `Semantic completion for ${expected}`,
+    );
+    semanticCompletionDurationsMs.push(Math.round(performance.now() - startedAt));
+    const item = result?.items?.find((candidate) => candidate.label === expected);
+    if (item?.kind !== kind || item.textEdit?.newText !== expected || !item.detail) {
+      throw new Error(`Missing semantic completion for ${expected}: ${JSON.stringify(result)}`);
+    }
+    if (expected === "completionFirst" && !item.detail.includes("String")) {
+      throw new Error(`Receiver type was not substituted: ${item.detail}`);
+    }
+    if (result.items.length > 128) throw new Error("Semantic completion exceeded its result bound");
+  }
+
   const processStatus = await readFile(`/proc/${server.pid}/status`, "utf8");
   const currentRssKiB = Number(/^VmRSS:\s+(\d+)\s+kB$/m.exec(processStatus)?.[1]);
   const peakRssKiB = Number(/^VmHWM:\s+(\d+)\s+kB$/m.exec(processStatus)?.[1]);
@@ -249,6 +282,7 @@ try {
     externalHoverMs,
     importCompletionDurationsMs,
     importClassCompletionDurationsMs,
+    semanticCompletionDurationsMs,
   }));
   if (peakRssKiB >= maximumRssKiB) {
     throw new Error(`Peak RSS ${peakRssKiB} KiB exceeded ${maximumRssKiB} KiB`);

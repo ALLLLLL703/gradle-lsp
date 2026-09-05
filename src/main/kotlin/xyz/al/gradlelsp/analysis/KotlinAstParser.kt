@@ -27,7 +27,9 @@ import org.jetbrains.kotlin.config.JVMConfigurationKeys
 import org.jetbrains.kotlin.config.JvmTarget
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.ClassKind
+import org.jetbrains.kotlin.descriptors.ConstructorDescriptor
 import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
+import org.jetbrains.kotlin.descriptors.DeclarationDescriptorWithVisibility
 import org.jetbrains.kotlin.descriptors.DescriptorVisibilities
 import org.jetbrains.kotlin.descriptors.ModuleDescriptor
 import org.jetbrains.kotlin.descriptors.findClassAcrossModuleDependencies
@@ -122,6 +124,9 @@ internal class KotlinAstParser(
             ComponentRegistrar.PLUGIN_COMPONENT_REGISTRARS,
             ScriptingCompilerConfigurationComponentRegistrar(),
         )
+        if (scriptContext == null) {
+            addJvmClasspathRoots(listOf(File(Unit::class.java.protectionDomain.codeSource.location.toURI())))
+        }
         scriptContext?.let { context ->
             addJvmClasspathRoots(context.classPath.map(Path::toFile))
             add(
@@ -182,7 +187,7 @@ internal class KotlinAstParser(
     /** A single lazy dependency module per bounded environment; never analyse the incomplete script. */
     @Synchronized
     @Suppress("DEPRECATION_ERROR")
-    fun importClasses(qualifier: FqName, prefix: String, sourcePackage: FqName): List<ClassDescriptor> {
+    fun importDeclarations(qualifier: FqName, prefix: String, sourcePackage: FqName): List<DeclarationDescriptor> {
         check(!closed.get()) { "Kotlin AST parser is closed" }
         val context = importModule?.takeIf { it.packageName == sourcePackage } ?: run {
             val header = if (sourcePackage.isRoot) "" else
@@ -211,15 +216,19 @@ internal class KotlinAstParser(
                 )
                 val owner = module.findClassAcrossModuleDependencies(classId) ?: continue
                 add(owner.unsubstitutedInnerClassesScope)
+                add(owner.staticScope)
+                if (owner.kind == ClassKind.OBJECT) add(owner.unsubstitutedMemberScope)
                 break
             }
         }
         return scopes.flatMap { scope ->
-            scope.getDescriptorsFiltered(DescriptorKindFilter.CLASSIFIERS) { name ->
+            scope.getDescriptorsFiltered(DescriptorKindFilter.ALL) { name ->
                 name.asString().startsWith(prefix, ignoreCase = true)
-            }.filterIsInstance<ClassDescriptor>()
+            }
         }.filter { descriptor ->
-            !descriptor.name.isSpecial && descriptor.kind != ClassKind.ENUM_ENTRY &&
+            !descriptor.name.isSpecial && descriptor !is ConstructorDescriptor &&
+                !(descriptor is ClassDescriptor && descriptor.kind == ClassKind.ENUM_ENTRY) &&
+                descriptor is DeclarationDescriptorWithVisibility &&
                 DescriptorVisibilities.isVisibleIgnoringReceiver(descriptor, context.origin, false)
         }
     }

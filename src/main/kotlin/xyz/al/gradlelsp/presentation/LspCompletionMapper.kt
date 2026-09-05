@@ -23,11 +23,18 @@ internal object LspCompletionMapper {
                         SourceCompletionKind.CLASS -> CompletionItemKind.Class
                         SourceCompletionKind.INTERFACE -> CompletionItemKind.Interface
                         SourceCompletionKind.ENUM -> CompletionItemKind.Enum
+                        SourceCompletionKind.ENUM_MEMBER -> CompletionItemKind.EnumMember
+                        SourceCompletionKind.TYPE_ALIAS -> CompletionItemKind.Class
+                        SourceCompletionKind.TYPE_PARAMETER -> CompletionItemKind.TypeParameter
+                        SourceCompletionKind.VARIABLE -> CompletionItemKind.Variable
+                        SourceCompletionKind.PROPERTY -> CompletionItemKind.Property
+                        SourceCompletionKind.FUNCTION -> CompletionItemKind.Function
+                        SourceCompletionKind.METHOD -> CompletionItemKind.Method
                         SourceCompletionKind.KEYWORD -> CompletionItemKind.Keyword
                     }
-                    detail = "(${candidate.kind.name.lowercase()}) ${candidate.qualifiedName}"
+                    detail = candidate.detail ?: "(${candidate.kind.name.lowercase()}) ${candidate.qualifiedName}"
                     filterText = candidate.name
-                    sortText = candidate.qualifiedName
+                    sortText = candidate.sortText
                     insertTextFormat = InsertTextFormat.PlainText
                     textEdit = Either.forLeft(
                         TextEdit(

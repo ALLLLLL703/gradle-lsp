@@ -157,7 +157,7 @@ internal class GradleTextDocumentService(
                     if (!documents.isCurrent(snapshot)) return@supplyAsync emptyCompletions()
                     val offset = Utf16LineMap(snapshot.text).offsetAt(params.position)
                         ?: return@supplyAsync emptyCompletions()
-                    val completions = navigation.completeImports(
+                    val completions = navigation.complete(
                         AnalysisDocument(snapshot.uri, snapshot.fileName, snapshot.text),
                         offset,
                     )
@@ -166,7 +166,7 @@ internal class GradleTextDocumentService(
                     Either.forRight(LspCompletionMapper.map(snapshot.text, completions))
                 } catch (failure: Exception) {
                     logger.log(
-                        "gradle-lsp: import completion failed for ${snapshot.uri}: " +
+                        "gradle-lsp: completion failed for ${snapshot.uri}: " +
                             (failure.message ?: failure::class.java.simpleName),
                     )
                     emptyCompletions()

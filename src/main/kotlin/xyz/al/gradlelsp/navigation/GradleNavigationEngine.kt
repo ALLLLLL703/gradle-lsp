@@ -48,8 +48,8 @@ internal class GradleNavigationEngine(
     override fun implementations(document: AnalysisDocument, offset: Int): List<SourceDefinition> =
         engineFor(document)?.implementations(document, offset).orEmpty()
 
-    override fun completeImports(document: AnalysisDocument, offset: Int): SourceCompletions =
-        engineFor(document)?.completeImports(document, offset) ?: SourceCompletions.EMPTY
+    override fun complete(document: AnalysisDocument, offset: Int): SourceCompletions =
+        engineFor(document)?.complete(document, offset) ?: SourceCompletions.EMPTY
 
     override fun hover(document: AnalysisDocument, offset: Int): SourceHover? =
         engineFor(document)?.hover(document, offset)

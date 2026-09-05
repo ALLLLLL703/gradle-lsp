@@ -5,7 +5,7 @@ import org.jetbrains.kotlin.com.intellij.psi.PsiWhiteSpace
 import org.jetbrains.kotlin.com.intellij.psi.util.PsiTreeUtil
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
-import org.jetbrains.kotlin.descriptors.ClassKind
+import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.render
 import org.jetbrains.kotlin.psi.KtDotQualifiedExpression
@@ -13,7 +13,6 @@ import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtImportDirective
 import org.jetbrains.kotlin.psi.KtSimpleNameExpression
 import org.jetbrains.kotlin.psi.KtScriptInitializer
-import org.jetbrains.kotlin.resolve.DescriptorUtils
 import xyz.al.gradlelsp.analysis.AnalysisDocument
 import xyz.al.gradlelsp.analysis.KotlinAstParser
 
@@ -76,7 +75,7 @@ internal object KotlinImportCompletion {
         listOf(SourceCompletionItem("import", "import", "import ", context.startOffset, context.endOffset, SourceCompletionKind.KEYWORD)),
     )
 
-    fun complete(context: ImportPackageContext, packages: List<FqName>, classes: List<ClassDescriptor>): SourceCompletions {
+    fun complete(context: ImportPackageContext, packages: List<FqName>, declarations: List<DeclarationDescriptor>): SourceCompletions {
         val packageItems = packages.asSequence()
             .filter { name -> !name.isRoot && name.parent() == context.qualifier }
             .filter { name -> name.shortName().asString().startsWith(context.prefix, ignoreCase = true) }
@@ -90,24 +89,14 @@ internal object KotlinImportCompletion {
                     endOffset = context.endOffset,
                 )
             }
-        val classItems = classes.asSequence().map { descriptor ->
-            val rendered = descriptor.name.render()
-            SourceCompletionItem(
-                name = rendered,
-                qualifiedName = DescriptorUtils.getFqNameSafe(descriptor).asString(),
-                insertText = rendered,
-                startOffset = context.startOffset,
-                endOffset = context.endOffset,
-                kind = when (descriptor.kind) {
-                    ClassKind.INTERFACE, ClassKind.ANNOTATION_CLASS -> SourceCompletionKind.INTERFACE
-                    ClassKind.ENUM_CLASS -> SourceCompletionKind.ENUM
-                    else -> SourceCompletionKind.CLASS
-                },
-            )
+        val declarationItems = declarations.asSequence().map { descriptor ->
+            val item = KotlinSemanticCompletion.item(descriptor, context.startOffset, context.endOffset)
+            // Preserve the existing concise, qualified-name presentation for imported classes.
+            if (descriptor is ClassDescriptor) item.copy(detail = null) else item
         }
-        val matches = (packageItems + classItems)
-            .distinctBy { it.qualifiedName to it.kind }
-            .sortedWith(compareBy<SourceCompletionItem> { it.qualifiedName }.thenBy { it.kind })
+        val matches = (packageItems + declarationItems)
+            .distinctBy { Triple(it.qualifiedName, it.kind, it.detail) }
+            .sortedWith(compareBy<SourceCompletionItem> { it.qualifiedName }.thenBy { it.kind }.thenBy { it.detail })
             .take(MAXIMUM_ITEMS + 1)
             .toList()
         return SourceCompletions(matches.take(MAXIMUM_ITEMS), isIncomplete = matches.size > MAXIMUM_ITEMS)

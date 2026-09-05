@@ -4,8 +4,10 @@
 imports. For example, `import org.gr` offers `gradle.`, `import org.gradle.api.Pro`
 offers `Project`, and `import java.util.Map.En` offers `Entry`. Nested classes,
 Kotlin `inner` classes, interfaces, objects and enum types are supported. The
-advertised trigger is `.`. Callable members, type aliases and auto-imports are not
-part of this feature.
+advertised trigger is `.`. Imports also offer compiler-backed top-level callable
+functions/properties, type aliases and Java static/object members, with distinct
+callable overload signatures. Auto-import insertion is not implemented. See
+[general completion](general-completion.md) for ordinary expression/type completion.
 
 At a legal file-header position, `im` / `imp` completes to `import ` with kind
 `Keyword`. This also works before existing imports and in incomplete input,
@@ -17,14 +19,15 @@ strings, expressions, declarations, aliases, or after script statements.
 - The current unsaved document is parsed with a completion identifier at the caret.
   Only a simple-name expression inside a top-level `KtImportDirective`'s imported
   reference is accepted. Comments, strings, alias identifiers, ordinary expressions,
-  and a new line after an unfinished import do not enter package/class lookup.
+  and a new line after an unfinished import do not enter import-path lookup.
+  Ordinary expressions are handled separately by semantic completion.
   Keyword placement is independently checked by reparsing a candidate import and
   requiring a top-level import directive at the replacement offset.
 - Qualifiers and the typed prefix come from Kotlin PSI. Incomplete imports and
   unrelated syntax errors use the compiler's error recovery.
 - Candidates are immediate subpackages from the script's Gradle classpath and JDK,
   obtained through the compiler environment's classpath PSI package finder.
-  Class candidates come from compiler package and inner-class scopes. Class IDs
+  Declaration candidates come from compiler package, inner-class, static and object scopes. Class IDs
   resolve the package/class boundary without capitalization heuristics. Compiler
   visibility checks use a source-backed origin in the script's declared package,
   excluding inaccessible types, synthetic file facades and enum entries.

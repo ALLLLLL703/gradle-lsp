@@ -151,7 +151,9 @@ class GradleImportCompletionIntegrationTest {
                 if (line.startsWith("/*")) assertEquals(Position(0, 30), edit.range.start)
             }
             assertTrue(complete("import java.util.ArrayList.si$CARET").second.items.isEmpty())
-            assertTrue(complete("import org.gradle.api.Project.$CARET").second.items.isEmpty())
+            assertTrue(complete("import java.util.Collections.emptyL$CARET").second.items.any { it.label == "emptyList" })
+            assertTrue(complete("import kotlin.collections.listO$CARET").second.items.count { it.label == "listOf" } >= 2)
+            assertFalse(complete("import org.gradle.api.Project.$CARET").second.items.any { it.label == "getTasks" })
             assertTrue(complete("import xyz.al.doesnotexist.$CARET").second.items.isEmpty())
 
             val beforeNonImport = modelCalls.get()
@@ -162,7 +164,6 @@ class GradleImportCompletionIntegrationTest {
                 "import java.util.*$CARET",
                 "import /* $CARET */ org.gradle.api.Project",
                 "fun scope() { import org.gr$CARET }",
-                "val ordinary = org.gr$CARET",
                 "package org.gr$CARET",
             )) {
                 assertTrue(complete(text).second.items.isEmpty(), text)
@@ -179,7 +180,7 @@ class GradleImportCompletionIntegrationTest {
         KotlinFileNavigationEngine(modelProvider = { model }).use { engine ->
             fun complete(markedText: String): SourceCompletions {
                 val text = markedText.replace(CARET, "")
-                return engine.completeImports(
+                return engine.complete(
                     AnalysisDocument(temporaryDirectory.resolve("build.gradle.kts").toUri().toString(), "build.gradle.kts", text),
                     markedText.indexOf(CARET),
                 )
@@ -226,13 +227,20 @@ class GradleImportCompletionIntegrationTest {
         KotlinFileNavigationEngine(modelProvider = { model }).use { engine ->
             fun complete(path: String): SourceCompletions {
                 val text = "import $path"
-                return engine.completeImports(
+                return engine.complete(
                     AnalysisDocument(temporaryDirectory.resolve("build.gradle.kts").toUri().toString(), "build.gradle.kts", text),
                     text.length,
                 )
             }
             val prefix = "xyz.al.gradlelsp.fixture."
-            assertEquals(listOf("ImportOuter"), complete("${prefix}Import").items.map { it.name })
+            assertEquals(listOf("ImportOuter", "importFixtureFunction", "importFixtureFunction", "importFixtureProperty"),
+                complete("${prefix}Import").items.map { it.name })
+            val callables = complete("${prefix}importFixtureF").items
+            assertEquals(2, callables.size)
+            assertEquals(2, callables.map { it.detail }.distinct().size)
+            assertTrue(callables.all { it.kind == SourceCompletionKind.FUNCTION })
+            assertEquals(SourceCompletionKind.PROPERTY, complete("${prefix}importFixtureP").items.single().kind)
+            assertEquals(SourceCompletionKind.TYPE_ALIAS, complete("${prefix}FixtureA").items.single().kind)
             val members = complete("${prefix}ImportOuter.").items
             assertEquals(listOf("Contract", "Inner", "Mode", "Nested", "Singleton"), members.map { it.name })
             assertEquals(SourceCompletionKind.INTERFACE, members.single { it.name == "Contract" }.kind)
@@ -279,6 +287,7 @@ class GradleImportCompletionIntegrationTest {
                 assertTrue("import".startsWith(replaced), replaced)
                 if (input.startsWith("/*")) assertEquals(Position(0, 9), edit.range.start)
             }
+            assertEquals(0, modelCalls.get(), "Header import keyword completion must not load a model")
             for (input in listOf(
                 "val before = 1\nim$CARET",
                 "fun f() { im$CARET }",
@@ -289,8 +298,7 @@ class GradleImportCompletionIntegrationTest {
                 "val x = \"im$CARET\"",
                 "import java.util.List as im$CARET",
                 "`im${CARET}port`",
-            )) assertTrue(complete(input).second.items.isEmpty(), input)
-            assertEquals(0, modelCalls.get())
+            )) assertFalse(complete(input).second.items.any { it.kind == CompletionItemKind.Keyword }, input)
         }
     }
 
@@ -305,7 +313,7 @@ class GradleImportCompletionIntegrationTest {
         val navigation = object : DocumentNavigationEngine {
             override fun definitions(document: AnalysisDocument, offset: Int): List<SourceDefinition> = emptyList()
 
-            override fun completeImports(document: AnalysisDocument, offset: Int): SourceCompletions {
+            override fun complete(document: AnalysisDocument, offset: Int): SourceCompletions {
                 if (calls.incrementAndGet() == 1) {
                     entered.countDown()
                     check(release.await(10, TimeUnit.SECONDS))

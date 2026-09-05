@@ -18,3 +18,6 @@ private class ImportPrivate
 
 fun importFixtureFunction(): Any = object {}
 val importFixtureProperty = 1
+
+fun importFixtureFunction(value: String): String = value
+typealias FixtureAlias = ImportOuter
