@@ -232,8 +232,16 @@ class GradleSemanticCompletionIntegrationTest {
                 assertTrue(keywords(marked).isEmpty(), "$marked: ${keywords(marked)}")
             }
             for (marked in listOf("val s = \"x\"\ns.tr<caret>", "val s: String? = null\ns?.tr<caret>",
-                "String::tr<caret>", "val s = \"x\"\ns.tr<caret>()\nval broken =", "val s = \"x\"\ns.tr<caret>\nval broken =")) {
+                "String::tr<caret>", "::cla<caret>", "val s = \"x\"\ns.cla<caret>",
+                "val s = \"x\"\ns.tr<caret>()\nval broken =", "val s = \"x\"\ns.tr<caret>\nval broken =")) {
                 assertTrue(keywords(marked).isEmpty(), "$marked: ${keywords(marked)}")
+            }
+            for (marked in listOf("val token = String::cla<caret>", "val token = kotlin.String::<caret>",
+                "val token = \"value\"::cla<caret>", "val broken =\nval token = String::cla<caret>")) {
+                assertEquals(listOf("class"), keywords(marked), marked)
+                val item = complete(marked).items.single { it.kind == org.eclipse.lsp4j.CompletionItemKind.Keyword }
+                assertEquals("class", item.textEdit.left.newText)
+                assertEquals(org.eclipse.lsp4j.InsertTextFormat.PlainText, item.insertTextFormat)
             }
             assertContains(keywords("val broken =\nval x = tr<caret>"), "true")
             assertContains(keywords("val x = \"text \${tr<caret>}\""), "true")

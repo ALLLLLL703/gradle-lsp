@@ -41,8 +41,19 @@ internal object KotlinKeywordCompletion {
         val reference = leaf.parent as? KtSimpleNameExpression
         val selector = (reference?.parent as? KtCallExpression) ?: reference
         // Reject selector contexts before probe parsing can recover an invalid keyword as a sibling.
-        if (selector != null && (selector.parent as? KtQualifiedExpression)?.selectorExpression === selector ||
-            reference != null && (reference.parent as? KtCallableReferenceExpression)?.callableReference === reference) return emptyList()
+        if (selector != null && (selector.parent as? KtQualifiedExpression)?.selectorExpression === selector) return emptyList()
+        val callableReference = (reference?.parent as? KtCallableReferenceExpression)
+            ?.takeIf { it.callableReference === reference }
+        if (callableReference != null) {
+            // `class` is the sole keyword valid after `::`; require a recovered class-literal AST.
+            if (callableReference.receiverExpression == null || !CLASS_KEYWORD.value.startsWith(prefix)) return emptyList()
+            val probe = parser.parse(document.fileName, document.text.substring(0, start) +
+                CLASS_KEYWORD.value + " " + document.text.substring(end)).psi
+            val keyword = probe.findElementAt(start)
+            if (keyword?.node?.elementType != CLASS_KEYWORD || keyword.parent !is KtClassLiteralExpression) return emptyList()
+            return listOf(SourceCompletionItem(CLASS_KEYWORD.value, CLASS_KEYWORD.value, CLASS_KEYWORD.value,
+                start, end, SourceCompletionKind.KEYWORD, sortText = "000:keyword:${CLASS_KEYWORD.value}"))
+        }
         val declarationPosition = reference?.parent is KtScriptInitializer || reference?.parent is KtBlockExpression ||
             ancestors.takeWhile { it !is KtDeclaration }.any { it is KtClassBody || it is KtModifierList }
         if (ancestors.any { it is KtImportDirective || it is KtPackageDirective || it is KtSimpleNameStringTemplateEntry || it is KtValueArgumentName }) return emptyList()

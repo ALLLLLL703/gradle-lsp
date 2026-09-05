@@ -75,7 +75,9 @@ run alongside these scenarios.
   crossing function/class boundaries, `this` with an implicit receiver and `super`
   inside a class receiver context. Comments, character/string text and simple
   `$name` template entries exclude keywords; `${expression}` supports ordinary
-  semantic and keyword completion. Malformed initializers/unclosed blocks are tested.
+  semantic and keyword completion. After `::`, only `class` is offered when a
+  compiler probe produces a class-literal expression with a receiver; ordinary
+  member selectors still exclude keywords. Malformed initializers/unclosed blocks are tested.
 - Legal header `import` is merged with keywords and useful semantic candidates,
   including an empty header with the real Gradle model. Keywords rank ahead of
   large receiver scopes so truncation does not hide header keywords. Import directive bodies still use import-only lookup.
@@ -86,7 +88,8 @@ run alongside these scenarios.
   retained. Existing `=` is preserved. No source-text callee guessing is used.
 - Function/method and concrete constructor items show compiler signatures. With
   negotiated `completionItem.snippetSupport`, required parameters become escaped
-  snippet placeholders and a final tab stop. Defaults/varargs are omitted.
+  snippet placeholders and a final tab stop. Defaults/varargs are omitted where
+  safe; later required Kotlin parameters use named arguments to preserve mapping.
   Plaintext clients receive `name()` without snippet syntax. Existing parentheses,
   type arguments, trailing lambdas, receiver dots, type positions and callable
   references are not overwritten or doubled. `String::substring` uses the compiler
