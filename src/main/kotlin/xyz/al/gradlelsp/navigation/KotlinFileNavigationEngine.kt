@@ -40,6 +40,8 @@ import xyz.al.gradlelsp.analysis.KotlinAstParser
 import xyz.al.gradlelsp.analysis.KotlinGradleScriptTemplate
 import xyz.al.gradlelsp.analysis.KotlinScriptAnalysisContext
 import xyz.al.gradlelsp.analysis.ParsedKotlinFile
+import xyz.al.gradlelsp.completion.ImportKeywordContext
+import xyz.al.gradlelsp.completion.ImportPackageContext
 import xyz.al.gradlelsp.completion.KotlinImportCompletion
 import xyz.al.gradlelsp.completion.SourceCompletions
 import xyz.al.gradlelsp.documents.DocumentStore
@@ -267,10 +269,15 @@ internal class KotlinFileNavigationEngine(
     override fun completeImports(document: AnalysisDocument, offset: Int): SourceCompletions {
         check(!closed.get()) { "Kotlin navigation engine is closed" }
         val context = KotlinImportCompletion.context(localParser, document, offset) ?: return SourceCompletions.EMPTY
+        if (context is ImportKeywordContext) return KotlinImportCompletion.keyword(context)
+        check(context is ImportPackageContext)
         val model = modelProvider.modelFor(Path.of(URI.create(document.uri)))
-        // Share the bounded compiler environment with navigation; package lookup needs no BindingContext.
         return withPinnedParser(document.fileName, model) { parser ->
-            KotlinImportCompletion.complete(context, parser.subPackages(context.qualifier))
+            KotlinImportCompletion.complete(
+                context,
+                parser.subPackages(context.qualifier),
+                parser.importClasses(context.qualifier, context.prefix, context.sourcePackage),
+            )
         }
     }
 

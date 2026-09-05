@@ -21,7 +21,9 @@ import xyz.al.gradlelsp.analysis.GradleDsl
 import xyz.al.gradlelsp.analysis.KotlinAstParser
 import xyz.al.gradlelsp.analysis.SourceDiagnostic
 import xyz.al.gradlelsp.completion.SourceCompletions
-import xyz.al.gradlelsp.completion.SourcePackageCompletion
+import xyz.al.gradlelsp.completion.SourceCompletionItem
+import xyz.al.gradlelsp.completion.SourceCompletionKind
+import xyz.al.gradlelsp.fixture.ImportOuter
 import xyz.al.gradlelsp.documents.DocumentStore
 import xyz.al.gradlelsp.gradle.GradleKotlinDslModel
 import xyz.al.gradlelsp.gradle.GradleKotlinDslModelLoader
@@ -128,6 +130,27 @@ class GradleImportCompletionIntegrationTest {
                 if (line.startsWith("/*")) assertEquals(Position(0, 20), edit.range.start)
             }
 
+            for ((line, expectedType, expectedKind) in listOf(
+                Triple("import org.gradle.api.Pro$CARET", "org.gradle.api.Project", CompletionItemKind.Interface),
+                Triple("import java.util.Ar${CARET}rayList", "java.util.ArrayList", CompletionItemKind.Class),
+                Triple("/* 😀 */ import java.util.Map.En$CARET", "java.util.Map.Entry", CompletionItemKind.Interface),
+                Triple("import kotlin.collections.Map.En$CARET", "kotlin.collections.Map.Entry", CompletionItemKind.Interface),
+                Triple("import java.lang.Thread.St$CARET", "java.lang.Thread.State", CompletionItemKind.Enum),
+                Triple("import java.util.Ma${CARET}p.Entry", "java.util.Map", CompletionItemKind.Interface),
+            )) {
+                val (text, result) = complete(line + "\nval broken =\nval recovered = 42")
+                val item = result.items.single { it.detail.endsWith(" $expectedType") }
+                assertEquals(expectedKind, item.kind)
+                val shortName = expectedType.substringAfterLast('.')
+                assertEquals(shortName, item.label)
+                assertEquals(shortName, item.textEdit.left.newText)
+                val edit = item.textEdit.left
+                val lines = Utf16LineMap(text)
+                val changed = text.replaceRange(lines.offsetAt(edit.range.start)!!, lines.offsetAt(edit.range.end)!!, edit.newText)
+                assertTrue(changed.contains("import $expectedType"), changed)
+                if (line.startsWith("/*")) assertEquals(Position(0, 30), edit.range.start)
+            }
+            assertTrue(complete("import java.util.ArrayList.si$CARET").second.items.isEmpty())
             assertTrue(complete("import org.gradle.api.Project.$CARET").second.items.isEmpty())
             assertTrue(complete("import xyz.al.doesnotexist.$CARET").second.items.isEmpty())
 
@@ -141,7 +164,6 @@ class GradleImportCompletionIntegrationTest {
                 "fun scope() { import org.gr$CARET }",
                 "val ordinary = org.gr$CARET",
                 "package org.gr$CARET",
-                "import java.\n$CARET\nval recovered = 1",
             )) {
                 assertTrue(complete(text).second.items.isEmpty(), text)
             }
@@ -151,7 +173,7 @@ class GradleImportCompletionIntegrationTest {
 
     @Test
     fun `package candidates are bounded escaped and isolated by the compiler model generation`() {
-        val first = compilePackages("first", (0..139).map { "p%03d".format(it) } + listOf("when", "café"))
+        val first = compilePackages("first", (0..139).map { "p%03d".format(it) } + listOf("when", "café", "types"))
         val second = compilePackages("second", listOf("replacement"))
         var model = GradleKotlinDslModel(listOf(first), emptyList(), emptyList(), "first")
         KotlinFileNavigationEngine(modelProvider = { model }).use { engine ->
@@ -175,11 +197,100 @@ class GradleImportCompletionIntegrationTest {
             assertEquals(prefix.length, quoted.startOffset)
             assertEquals(prefix.length + "`when`".length, quoted.endOffset)
             assertEquals("café.", complete("${prefix}caf$CARET").items.single().insertText)
+            assertEquals(listOf("Marker"), complete("${prefix}types.$CARET").items.map { it.name })
+            assertEquals("Inner", complete("${prefix}types.Marker.In$CARET").items.single().name)
+            assertEquals("Deep", complete("${prefix}types.Marker.Nested.D$CARET").items.single().name)
+            assertTrue(complete("${prefix}types.Marker.Hidden.D$CARET").items.isEmpty())
+            assertTrue(complete("${prefix}types.Marker.Protected.$CARET").items.isEmpty())
+            val manyClasses = complete("${prefix}types.Marker.Part$CARET")
+            assertEquals(128, manyClasses.items.size)
+            assertTrue(manyClasses.isIncomplete)
+            val narrowClasses = complete("${prefix}types.Marker.Part13$CARET")
+            assertEquals((130..139).map { "Part$it" }, narrowClasses.items.map { it.name })
+            assertFalse(narrowClasses.isIncomplete)
+            val samePackage = complete("package xyz.al.gradlelsp.fixture.imports.types\n${prefix}types.Package$CARET")
+            assertEquals("PackageOnly", samePackage.items.single().name)
 
             model = GradleKotlinDslModel(listOf(second), emptyList(), emptyList(), "second")
             assertEquals(listOf("replacement"), complete("$prefix$CARET").items.map { it.name })
             model = GradleKotlinDslModel(listOf(first), emptyList(), emptyList(), "first")
             assertEquals("p139", complete("${prefix}p139$CARET").items.single().name)
+        }
+    }
+
+    @Test
+    fun `Kotlin import classifiers preserve nesting and exclude inaccessible and synthetic declarations`() {
+        val classes = Path.of(ImportOuter::class.java.protectionDomain.codeSource.location.toURI())
+        val stdlib = Path.of(Unit::class.java.protectionDomain.codeSource.location.toURI())
+        val model = GradleKotlinDslModel(listOf(classes, stdlib), emptyList(), emptyList())
+        KotlinFileNavigationEngine(modelProvider = { model }).use { engine ->
+            fun complete(path: String): SourceCompletions {
+                val text = "import $path"
+                return engine.completeImports(
+                    AnalysisDocument(temporaryDirectory.resolve("build.gradle.kts").toUri().toString(), "build.gradle.kts", text),
+                    text.length,
+                )
+            }
+            val prefix = "xyz.al.gradlelsp.fixture."
+            assertEquals(listOf("ImportOuter"), complete("${prefix}Import").items.map { it.name })
+            val members = complete("${prefix}ImportOuter.").items
+            assertEquals(listOf("Contract", "Inner", "Mode", "Nested", "Singleton"), members.map { it.name })
+            assertEquals(SourceCompletionKind.INTERFACE, members.single { it.name == "Contract" }.kind)
+            assertEquals(SourceCompletionKind.ENUM, members.single { it.name == "Mode" }.kind)
+            assertEquals(listOf("Nested"), complete("${prefix}ImportOuter.N").items.map { it.name })
+            assertTrue(complete("${prefix}ImportOuter.Missing").items.isEmpty())
+            assertEquals("Deep", complete("${prefix}ImportOuter.Nested.D").items.single().insertText)
+            assertTrue(complete("${prefix}ImportOuter.Hidden.").items.isEmpty())
+            assertTrue(complete("${prefix}ImportOuter.Mode.F").items.isEmpty())
+        }
+    }
+
+    @Test
+    fun `import keyword completion uses recovered header PSI without loading a Gradle model`() {
+        val uri = temporaryDirectory.resolve("build.gradle.kts").toUri().toString()
+        val documents = DocumentStore()
+        val modelCalls = AtomicInteger()
+        val engine = KotlinFileNavigationEngine(modelProvider = { modelCalls.incrementAndGet(); error("No model for keyword completion") })
+        GradleTextDocumentService(documents = documents, analyzer = noAnalysis(), navigation = engine).use { service ->
+            fun complete(markedText: String): Pair<String, CompletionList> {
+                val text = markedText.replace(CARET, "")
+                documents.open(uri, 1, text)
+                val result = service.completion(CompletionParams(TextDocumentIdentifier(uri),
+                    Utf16LineMap(text).positionAt(markedText.indexOf(CARET)))).get(10, TimeUnit.SECONDS).right
+                return text to result
+            }
+            for (input in listOf(
+                CARET,
+                "im$CARET",
+                "im${CARET}port",
+                "/* 😀 */ imp$CARET\nval broken =\nval recovered = 1",
+                "import java.util.List\nim$CARET",
+                "import java.\n$CARET\nval recovered = 1",
+                "package xyz.al.gradlelsp.fixture\nim$CARET\nimport java.util.List",
+            )) {
+                val (text, result) = complete(input)
+                val item = result.items.single()
+                assertEquals("import", item.label)
+                assertEquals(CompletionItemKind.Keyword, item.kind)
+                assertEquals("import ", item.textEdit.left.newText)
+                val edit = item.textEdit.left
+                val lines = Utf16LineMap(text)
+                val replaced = text.substring(lines.offsetAt(edit.range.start)!!, lines.offsetAt(edit.range.end)!!)
+                assertTrue("import".startsWith(replaced), replaced)
+                if (input.startsWith("/*")) assertEquals(Position(0, 9), edit.range.start)
+            }
+            for (input in listOf(
+                "val before = 1\nim$CARET",
+                "fun f() { im$CARET }",
+                "class C { im$CARET }",
+                "val x = im$CARET",
+                "im$CARET + 1",
+                "// im$CARET",
+                "val x = \"im$CARET\"",
+                "import java.util.List as im$CARET",
+                "`im${CARET}port`",
+            )) assertTrue(complete(input).second.items.isEmpty(), input)
+            assertEquals(0, modelCalls.get())
         }
     }
 
@@ -199,7 +310,7 @@ class GradleImportCompletionIntegrationTest {
                     entered.countDown()
                     check(release.await(10, TimeUnit.SECONDS))
                 }
-                return SourceCompletions(listOf(SourcePackageCompletion("gradle", "org.gradle", "gradle.", 11, 13)))
+                return SourceCompletions(listOf(SourceCompletionItem("gradle", "org.gradle", "gradle.", 11, 13)))
             }
         }
         GradleTextDocumentService(documents = documents, analyzer = noAnalysis(), navigation = navigation).use { service ->
@@ -234,7 +345,13 @@ class GradleImportCompletionIntegrationTest {
         val sources = suffixes.map { suffix ->
             val source = temporaryDirectory.resolve(name).resolve(suffix).resolve("Marker.java")
             Files.createDirectories(source.parent)
-            Files.writeString(source, "package xyz.al.gradlelsp.fixture.imports.$suffix; public final class Marker {}")
+            val members = if (suffix == "types") {
+                "public class Inner {} public static class Nested { public static class Deep {} } " +
+                    "private static class Hidden { public static class Deep {} } protected static class Protected {} " +
+                    (0..139).joinToString(" ") { "public static class Part%03d {}".format(it) }
+            } else ""
+            Files.writeString(source,
+                "package xyz.al.gradlelsp.fixture.imports.$suffix; public final class Marker { $members } class PackageOnly {}")
             source.toString()
         }
         assertEquals(0, ToolProvider.getSystemJavaCompiler().run(null, null, null, "-proc:none", "-d", output.toString(), *sources.toTypedArray()))

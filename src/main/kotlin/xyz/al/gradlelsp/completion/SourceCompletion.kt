@@ -2,16 +2,19 @@ package xyz.al.gradlelsp.completion
 
 import xyz.al.gradlelsp.analysis.AnalysisDocument
 
-internal data class SourcePackageCompletion(
+internal enum class SourceCompletionKind { PACKAGE, CLASS, INTERFACE, ENUM, KEYWORD }
+
+internal data class SourceCompletionItem(
     val name: String,
     val qualifiedName: String,
     val insertText: String,
     val startOffset: Int,
     val endOffset: Int,
+    val kind: SourceCompletionKind = SourceCompletionKind.PACKAGE,
 )
 
 internal data class SourceCompletions(
-    val items: List<SourcePackageCompletion>,
+    val items: List<SourceCompletionItem>,
     val isIncomplete: Boolean = false,
 ) {
     companion object {

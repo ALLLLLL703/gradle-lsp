@@ -25,10 +25,21 @@ import org.jetbrains.kotlin.config.CommonConfigurationKeys
 import org.jetbrains.kotlin.config.CompilerConfiguration
 import org.jetbrains.kotlin.config.JVMConfigurationKeys
 import org.jetbrains.kotlin.config.JvmTarget
+import org.jetbrains.kotlin.descriptors.ClassDescriptor
+import org.jetbrains.kotlin.descriptors.ClassKind
+import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
+import org.jetbrains.kotlin.descriptors.DescriptorVisibilities
+import org.jetbrains.kotlin.descriptors.ModuleDescriptor
+import org.jetbrains.kotlin.descriptors.findClassAcrossModuleDependencies
+import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.FqName
+import org.jetbrains.kotlin.name.render
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtPsiFactory
 import org.jetbrains.kotlin.resolve.BindingContext
+import org.jetbrains.kotlin.resolve.scopes.DescriptorKindFilter
+import org.jetbrains.kotlin.resolve.scopes.getDescriptorsFiltered
+import org.jetbrains.kotlin.resolve.lazy.descriptors.LazyPackageDescriptor
 import org.jetbrains.kotlin.samWithReceiver.SamWithReceiverComponentRegistrar
 import org.jetbrains.kotlin.samWithReceiver.SamWithReceiverConfigurationKeys
 import org.jetbrains.kotlin.scripting.compiler.plugin.ScriptingCompilerConfigurationComponentRegistrar
@@ -141,6 +152,8 @@ internal class KotlinAstParser(
         EnvironmentConfigFiles.JVM_CONFIG_FILES,
     )
     private val psiFactory = KtPsiFactory(environment.project)
+    private data class ImportModule(val packageName: FqName, val module: ModuleDescriptor, val origin: DeclarationDescriptor)
+    private var importModule: ImportModule? = null
 
     @Synchronized
     fun parse(fileName: String, text: String): ParsedKotlinFile {
@@ -166,6 +179,51 @@ internal class KotlinAstParser(
         return finder.getSubPackages(psiPackage, scope).map { child -> FqName(child.qualifiedName) }
     }
 
+    /** A single lazy dependency module per bounded environment; never analyse the incomplete script. */
+    @Synchronized
+    @Suppress("DEPRECATION_ERROR")
+    fun importClasses(qualifier: FqName, prefix: String, sourcePackage: FqName): List<ClassDescriptor> {
+        check(!closed.get()) { "Kotlin AST parser is closed" }
+        val context = importModule?.takeIf { it.packageName == sourcePackage } ?: run {
+            val header = if (sourcePackage.isRoot) "" else
+                "package " + sourcePackage.pathSegments().joinToString(".") { it.render() }
+            val module = TopDownAnalyzerFacadeForJVM.analyzeFilesWithJavaIntegration(
+                environment.project,
+                listOf(psiFactory.createPhysicalFile("ImportCompletion.kt", header)),
+                CliBindingTrace(environment.project),
+                configuration,
+                environment::createPackagePartProvider,
+            ).moduleDescriptor
+            // CLI internal visibility needs a source-backed origin, not the module descriptor.
+            val origin = module.getPackage(sourcePackage).fragments.filterIsInstance<LazyPackageDescriptor>().single()
+            ImportModule(sourcePackage, module, origin).also { importModule = it }
+        }
+        val module = context.module
+        val scopes = buildList {
+            add(module.getPackage(qualifier).memberScope)
+            // Resolve the class ID at each package/class boundary, rather than guessing by casing.
+            val segments = qualifier.pathSegments().map { it.asString() }
+            for (boundary in segments.indices.reversed()) {
+                val classId = ClassId(
+                    FqName.fromSegments(segments.take(boundary)),
+                    FqName.fromSegments(segments.drop(boundary)),
+                    false,
+                )
+                val owner = module.findClassAcrossModuleDependencies(classId) ?: continue
+                add(owner.unsubstitutedInnerClassesScope)
+                break
+            }
+        }
+        return scopes.flatMap { scope ->
+            scope.getDescriptorsFiltered(DescriptorKindFilter.CLASSIFIERS) { name ->
+                name.asString().startsWith(prefix, ignoreCase = true)
+            }.filterIsInstance<ClassDescriptor>()
+        }.filter { descriptor ->
+            !descriptor.name.isSpecial && descriptor.kind != ClassKind.ENUM_ENTRY &&
+                DescriptorVisibilities.isVisibleIgnoringReceiver(descriptor, context.origin, false)
+        }
+    }
+
     @Synchronized
     @Suppress("DEPRECATION_ERROR")
     fun bindingContext(file: ParsedKotlinFile): BindingContext = bindingContext(listOf(file))
@@ -186,6 +244,7 @@ internal class KotlinAstParser(
 
     override fun close() {
         if (closed.compareAndSet(false, true)) {
+            importModule = null
             Disposer.dispose(disposable)
             scriptClassLoader?.close()
         }

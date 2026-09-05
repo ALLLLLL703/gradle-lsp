@@ -194,6 +194,46 @@ try {
     if (range.start.character !== expectedStart) throw new Error("Import completion did not replace only the current UTF-16 segment");
   }
 
+  const importClassCompletionDurationsMs = [];
+  for (const [importPath, expectedType, expectedKind] of [
+    ["org.gradle.api.Pro", "org.gradle.api.Project", 8],
+    ["java.util.ArrayL", "java.util.ArrayList", 7],
+    ["java.util.Map.En", "java.util.Map.Entry", 8],
+    ["kotlin.collections.Map.En", "kotlin.collections.Map.Entry", 8],
+    ["java.lang.Thread.St", "java.lang.Thread.State", 13],
+  ]) {
+    const line = `/* 😀 */ import ${importPath}`;
+    notify("textDocument/didChange", {
+      textDocument: { uri: scriptUri, version: ++version },
+      contentChanges: [{ text: `${line}\n${scriptText}\nval broken =` }],
+    });
+    const startedAt = performance.now();
+    const result = await withTimeout(
+      request("textDocument/completion", withDocument({ line: 0, character: line.length })),
+      30_000,
+      `Import class completion for ${importPath}`,
+    );
+    importClassCompletionDurationsMs.push(Math.round(performance.now() - startedAt));
+    const item = result?.items?.find((candidate) => candidate.detail.endsWith(` ${expectedType}`));
+    if (item?.kind !== expectedKind || item.textEdit?.newText !== expectedType.split(".").at(-1)) {
+      throw new Error(`Missing class completion for ${expectedType}: ${JSON.stringify(result)}`);
+    }
+  }
+  const keywordLine = "/* 😀 */ imp";
+  notify("textDocument/didChange", {
+    textDocument: { uri: scriptUri, version: ++version },
+    contentChanges: [{ text: `${keywordLine}\n${scriptText}` }],
+  });
+  const keywordCompletion = await withTimeout(
+    request("textDocument/completion", withDocument({ line: 0, character: keywordLine.length })),
+    30_000,
+    "Import keyword completion",
+  );
+  const keyword = keywordCompletion?.items?.find((item) => item.label === "import");
+  if (keyword?.kind !== 14 || keyword.textEdit?.newText !== "import " || keyword.textEdit.range.start.character !== 9) {
+    throw new Error(`Invalid import keyword completion: ${JSON.stringify(keywordCompletion)}`);
+  }
+
   const processStatus = await readFile(`/proc/${server.pid}/status`, "utf8");
   const currentRssKiB = Number(/^VmRSS:\s+(\d+)\s+kB$/m.exec(processStatus)?.[1]);
   const peakRssKiB = Number(/^VmHWM:\s+(\d+)\s+kB$/m.exec(processStatus)?.[1]);
@@ -208,6 +248,7 @@ try {
     externalDefinitionDurationsMs,
     externalHoverMs,
     importCompletionDurationsMs,
+    importClassCompletionDurationsMs,
   }));
   if (peakRssKiB >= maximumRssKiB) {
     throw new Error(`Peak RSS ${peakRssKiB} KiB exceeded ${maximumRssKiB} KiB`);
