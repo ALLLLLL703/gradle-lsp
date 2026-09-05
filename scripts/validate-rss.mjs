@@ -100,7 +100,7 @@ try {
     processId: process.pid,
     rootUri,
     workspaceFolders: [{ uri: rootUri, name: "gradle-lsp" }],
-    capabilities: {},
+    capabilities: { textDocument: { completion: { completionItem: { snippetSupport: true } } } },
   });
   if (initialize.capabilities.hoverProvider !== true) throw new Error("Server did not advertise hover support");
   if (!initialize.capabilities.completionProvider?.triggerCharacters?.includes(".")) {
@@ -245,7 +245,7 @@ try {
     ["val completionCallback: sus", " () -> Unit = TODO()", "suspend", 14],
     ["fun completionArgs(count: Int, text: String) {}\ncompletionArgs(1, te", ")", "text", 6, "text = "],
     ["fun completionCall(count: Int) {}\ncompletionC", "all()", "completionCall", 2, "completionCall"],
-    ["class CompletionType(val count: Int)\nCompletionT", "", "CompletionType", 7, "CompletionType()"],
+    ["class CompletionType(val count: Int)\nCompletionT", "", "CompletionType", 7, "CompletionType(${1:count})$0"],
     ["String::sub", "", "substring", 3, "substring"],
     ["val completionTemplate = \"value \${tr", "}\"", "true", 14],
     ["dependencies { ", " }", "add", 2],
@@ -264,7 +264,11 @@ try {
     );
     semanticCompletionDurationsMs.push(Math.round(performance.now() - startedAt));
     const item = result?.items?.find((candidate) => candidate.label === expected);
-    if (item?.kind !== kind || item.textEdit?.newText !== (insertion ?? expected + ([2, 3].includes(kind) ? "()" : "")) || !item.detail) {
+    const inserted = item?.textEdit?.newText;
+    const validInsertion = insertion !== undefined ? inserted === insertion : [2, 3].includes(kind)
+      ? item?.insertTextFormat === 2 && inserted?.startsWith(`${expected}(`) && inserted?.endsWith(")$0")
+      : inserted === expected;
+    if (item?.kind !== kind || !validInsertion || !item.detail) {
       throw new Error(`Missing semantic completion for ${expected}: ${JSON.stringify(result)}`);
     }
     if (expected === "completionFirst" && !item.detail.includes("String")) {

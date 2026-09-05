@@ -72,7 +72,7 @@ internal object KotlinImportCompletion {
     }
 
     fun keyword(context: ImportKeywordContext): SourceCompletions = SourceCompletions(
-        listOf(SourceCompletionItem("import", "import", "import ", context.startOffset, context.endOffset, SourceCompletionKind.KEYWORD, sortText = "050:keyword:import")),
+        listOf(SourceCompletionItem("import", "import", "import ", context.startOffset, context.endOffset, SourceCompletionKind.KEYWORD, sortText = "000:keyword:import")),
     )
 
     fun complete(context: ImportPackageContext, packages: List<FqName>, declarations: List<DeclarationDescriptor>): SourceCompletions {

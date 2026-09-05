@@ -6,6 +6,11 @@ import org.jetbrains.kotlin.lexer.KtKeywordToken
 import org.jetbrains.kotlin.lexer.KtModifierKeywordToken
 import org.jetbrains.kotlin.lexer.KtTokens.*
 import org.jetbrains.kotlin.psi.*
+import org.jetbrains.kotlin.descriptors.ClassKind
+import org.jetbrains.kotlin.descriptors.annotations.KotlinTarget
+import org.jetbrains.kotlin.config.LanguageVersionSettingsImpl
+import org.jetbrains.kotlin.resolve.AnnotationChecker
+import org.jetbrains.kotlin.resolve.possibleTargetPredicateMap
 import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.Compatibility
 import org.jetbrains.kotlin.resolve.compatibility
@@ -71,11 +76,26 @@ internal object KotlinKeywordCompletion {
                         node is KtDeclaration && node.parent is KtValueArgument
                     }
             }.map { token -> SourceCompletionItem(token.value, token.value, token.value, start, end,
-                SourceCompletionKind.KEYWORD, sortText = "050:keyword:${token.value}") }
+                SourceCompletionKind.KEYWORD, sortText = "000:keyword:${token.value}") }
     }
 
     private fun validModifier(list: KtModifierList?, token: KtModifierKeywordToken): Boolean {
         if (list == null) return false
+        if (list.node.getChildren(org.jetbrains.kotlin.com.intellij.psi.tree.TokenSet.create(token)).size > 1) return false
+        val owner = list.parent as? KtModifierListOwner ?: return false
+        if (owner is KtTypeReference) return TYPE_MODIFIER_KEYWORDS.contains(token)
+        if (owner is KtTypeProjection) return TYPE_ARGUMENT_MODIFIER_KEYWORDS.contains(token)
+        val targets = if (owner is KtClassOrObject) KotlinTarget.classActualTargets(
+            when {
+                owner is KtObjectDeclaration -> ClassKind.OBJECT
+                owner is KtClass && owner.isInterface() -> ClassKind.INTERFACE
+                owner is KtClass && owner.isEnum() -> ClassKind.ENUM_CLASS
+                owner.hasModifier(ANNOTATION_KEYWORD) -> ClassKind.ANNOTATION_CLASS
+                else -> ClassKind.CLASS
+            }, owner.hasModifier(INNER_KEYWORD), (owner as? KtObjectDeclaration)?.isCompanion() == true,
+            owner.parent is KtBlockExpression && owner.parent.parent !is KtScript)
+        else AnnotationChecker.getDeclarationSiteActualTargetList(owner, null, BindingContext.EMPTY)
+        if (targets.none { possibleTargetPredicateMap[token]?.isAllowed(it, LanguageVersionSettingsImpl.DEFAULT) == true }) return false
         if (MODIFIER_KEYWORDS_ARRAY.any { it != token && list.hasModifier(it) &&
                 compatibility(it, token) in setOf(Compatibility.INCOMPATIBLE, Compatibility.REPEATED) }) return false
         val declaration = list.parent

@@ -170,7 +170,7 @@ class GradleSemanticCompletionIntegrationTest {
                     Utf16LineMap(text).positionAt(marked.indexOf("<caret>")))).get(30, TimeUnit.SECONDS).right
             }
             fun keywords(marked: String) = complete(marked).items.filter { it.kind == org.eclipse.lsp4j.CompletionItemKind.Keyword }.map { it.label }
-            for (keyword in listOf("val", "var", "fun", "class", "interface", "object", "private", "public", "internal", "data", "sealed", "open", "abstract", "typealias", "suspend", "inline")) {
+            for (keyword in listOf("val", "var", "fun", "class", "interface", "object", "private", "public", "internal", "data", "sealed", "open", "abstract", "typealias", "suspend", "inline", "package")) {
                 assertContains(keywords(keyword.take(2) + "<caret>"), keyword)
             }
             val header = complete("<caret>")
@@ -188,7 +188,7 @@ class GradleSemanticCompletionIntegrationTest {
             assertContains(keywords("open class Parent\nclass Child : Parent() { fun use() { sup<caret> } }"), "super")
             assertContains(keywords("val value: sus<caret> () -> Unit = TODO()"), "suspend")
             for (marked in listOf("br<caret>", "contin<caret>", "ret<caret>", "sup<caret>", "val x = cla<caret>",
-                "fun use() { pri<caret> }", "val x: va<caret> = TODO()", "\"text va<caret>\"", "// va<caret>",
+                "fun use() { pri<caret> }", "private pri<caret>", "fun use() { cons<caret> }", "val x: va<caret> = TODO()", "\"text va<caret>\"", "// va<caret>",
                 "\"text \$va<caret>\"", "fun use() { while(true) { fun nested() { br<caret> } } }")) {
                 assertTrue(keywords(marked).isEmpty(), "$marked: ${keywords(marked)}")
             }
@@ -247,6 +247,7 @@ class GradleSemanticCompletionIntegrationTest {
         GradleTextDocumentService(documents = documents, analyzer = analyzer, navigation = engine).use { service ->
             var version = 0
             for ((marked, expected) in listOf(
+                "<caret>" to "import",
                 "dependencies { impl<caret> }" to "implementation",
                 "tasks.reg<caret>" to "register",
                 "project.na<caret>" to "name",

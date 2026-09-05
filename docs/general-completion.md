@@ -64,7 +64,7 @@ run alongside these scenarios.
 - Keyword candidates come from Kotlin `KtTokens.KEYWORDS`/`SOFT_KEYWORDS`. Each
   matching candidate is reparsed at the PSI caret with a small compiler-input
   continuation; the parser must recognize the keyword outside an error node.
-  PSI declaration/type/expression context, modifier compatibility and lexical
+  PSI declaration/type/expression context, compiler modifier target predicates/compatibility and lexical
   receiver/function/loop boundaries further restrict candidates. Verified headers,
   declarations and modifiers include `package`, `import`, `val`, `var`, `fun`,
   `class`, `interface`, `object`, `typealias`, visibility, modality, `data`,
@@ -77,11 +77,12 @@ run alongside these scenarios.
   `$name` template entries exclude keywords; `${expression}` supports ordinary
   semantic and keyword completion. Malformed initializers/unclosed blocks are tested.
 - Legal header `import` is merged with keywords and useful semantic candidates,
-  including an empty header. Import directive bodies still use import-only lookup.
+  including an empty header with the real Gradle model. Keywords rank ahead of
+  large receiver scopes so truncation does not hide header keywords. Import directive bodies still use import-only lookup.
 - Named arguments use compiler resolved calls and ambiguous reference targets,
   stable parameter names, supplied positional/named argument PSI and compiler
   subtype constraints (including explicit type arguments). Supplied parameters
-  are excluded, mismatching overloads rejected, and distinct viable signatures
+  (including trailing lambdas and repeated positional varargs) are excluded, mismatching overloads rejected, and distinct viable signatures
   retained. Existing `=` is preserved. No source-text callee guessing is used.
 - Function/method and concrete constructor items show compiler signatures. With
   negotiated `completionItem.snippetSupport`, required parameters become escaped
@@ -206,3 +207,17 @@ representative headroom than the Stage 1 checkpoints; they are not an OS-enforce
 RSS guarantee on all JDKs, hosts or workspaces. Neither user installation nor push
 is part of validation. The build-file commit contains only the approved JVM flag;
 pre-existing user formatting remains unstaged and otherwise unchanged.
+
+Keyword follow-up tests also cover real-model blank headers, `package`, repeated
+visibility modifiers and invalid local `const`. Modifier target predicates are
+compiler-defined, with PSI-derived class targets and compiler type-modifier token
+sets. The packaged client negotiates snippets and checks callable snippet format
+and exact constructor placeholders, while integration tests retain plaintext
+capability fallback and identifier-only existing-call/callable-reference edits.
+
+Final repeated checks after keyword target/ranking refinements and packaged snippet
+negotiation: `./gradlew clean test installDist` passed (37 tests), followed by two
+ordinary RSS runs at **815,836 / 837,280 KiB** with 18 threads. General completions
+were **240–849 / 308–824 ms**; external definitions **964–1,476 / 964–1,398 ms**;
+external hover **1,073 / 1,066 ms**. No `JAVA_OPTS`, NMT, forced GC or reduced
+workload was used in these final acceptance runs.
