@@ -48,8 +48,11 @@ internal object KotlinNamedArgumentCompletion {
             call.valueArguments.forEachIndexed { index, value ->
                 if (value === argument) return@forEachIndexed
                 val name = value.getArgumentName()?.asName
-                val parameter = if (name != null) parameters.find { it.name == name }
-                    else parameters.getOrNull(index) ?: parameters.lastOrNull()?.takeIf { it.varargElementType != null }
+                val parameter = when {
+                    value is KtLambdaArgument -> parameters.lastOrNull()
+                    name != null -> parameters.find { it.name == name }
+                    else -> parameters.take(index + 1).firstOrNull { it.varargElementType != null } ?: parameters.getOrNull(index)
+                }
                 if (parameter == null || (!supplied.add(parameter.index) && parameter.varargElementType == null)) {
                     applicable = false
                 } else {

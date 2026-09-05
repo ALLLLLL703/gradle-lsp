@@ -204,6 +204,13 @@ class GradleSemanticCompletionIntegrationTest {
             assertContains(named("choose(te<caret>, count = 1)").map { it.label }, "text")
             assertTrue(complete("fun <T> generic(first: T, second: T) {}\ngeneric<Int>(\"wrong\", sec<caret>)").items.none { it.textEdit.left.newText == "second = " })
             assertEquals("text", complete(definitions + "choose(count = 1, te<caret> = \"value\")").items.single { it.label == "text" }.textEdit.left.newText)
+            val trailing = complete("fun trailing(first: Int = 0, second: Int = 1, block: () -> Unit) {}\ntrailing(<caret>) {}")
+                .items.filter { it.textEdit.left.newText.endsWith(" = ") }.map { it.label }
+            assertContains(trailing, "first")
+            assertContains(trailing, "second")
+            assertFalse("block" in trailing)
+            val varargs = complete("fun varied(vararg values: Int, text: String) {}\nvaried(1, 2, te<caret>)")
+            assertTrue(varargs.items.any { it.textEdit.left.newText == "text = " }, varargs.toString())
             val function = "fun callable(count: Int, text: String = \"default\") {}\n/* 😀 */ cal<caret>lable"
             val plain = complete(function).items.single { it.label == "callable" }
             assertEquals("callable()", plain.textEdit.left.newText)
