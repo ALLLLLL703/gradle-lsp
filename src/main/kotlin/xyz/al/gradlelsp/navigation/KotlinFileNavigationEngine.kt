@@ -43,6 +43,7 @@ import xyz.al.gradlelsp.analysis.ParsedKotlinFile
 import xyz.al.gradlelsp.completion.ImportKeywordContext
 import xyz.al.gradlelsp.completion.ImportPackageContext
 import xyz.al.gradlelsp.completion.KotlinSemanticCompletion
+import xyz.al.gradlelsp.completion.KotlinKeywordCompletion
 import xyz.al.gradlelsp.completion.KotlinImportCompletion
 import xyz.al.gradlelsp.completion.SourceCompletions
 import xyz.al.gradlelsp.documents.DocumentStore
@@ -270,17 +271,23 @@ internal class KotlinFileNavigationEngine(
     override fun complete(document: AnalysisDocument, offset: Int): SourceCompletions {
         check(!closed.get()) { "Kotlin navigation engine is closed" }
         val context = KotlinImportCompletion.context(localParser, document, offset)
-        if (context == null) {
-            val localContext = KotlinSemanticCompletion.context(localParser, document, offset) ?: return SourceCompletions.EMPTY
-            val model = runCatching { modelProvider.modelFor(Path.of(URI.create(document.uri))) }.getOrNull()
-            if (model == null) return KotlinSemanticCompletion.complete(localParser, localContext)
-            return withPinnedParser(document.fileName, model) { parser ->
-                val position = KotlinSemanticCompletion.context(parser, document, offset) ?: return@withPinnedParser SourceCompletions.EMPTY
-                KotlinSemanticCompletion.complete(parser, position)
+        if (context !is ImportPackageContext) {
+            val localPosition = KotlinSemanticCompletion.context(localParser, document, offset)
+            if (localPosition == null && context == null && KotlinKeywordCompletion.complete(localParser, document, offset, null, null).isEmpty())
+                return SourceCompletions.EMPTY
+            fun general(parser: KotlinAstParser): SourceCompletions {
+                val position = KotlinSemanticCompletion.context(parser, document, offset)
+                val binding = position?.let { parser.bindingContext(it.file) }
+                val semantic = if (position != null && binding != null) KotlinSemanticCompletion.complete(parser, position, binding)
+                    else SourceCompletions.EMPTY
+                val keywords = KotlinKeywordCompletion.complete(parser, document, offset, position, binding)
+                val header = if (context is ImportKeywordContext) KotlinImportCompletion.keyword(context).items else emptyList()
+                val items = (header + keywords + semantic.items).sortedBy { it.sortText }
+                return SourceCompletions(items.take(128), semantic.isIncomplete || items.size > 128)
             }
+            val model = runCatching { modelProvider.modelFor(Path.of(URI.create(document.uri))) }.getOrNull()
+            return if (model == null) general(localParser) else withPinnedParser(document.fileName, model, ::general)
         }
-        if (context is ImportKeywordContext) return KotlinImportCompletion.keyword(context)
-        check(context is ImportPackageContext)
         val model = modelProvider.modelFor(Path.of(URI.create(document.uri)))
         return withPinnedParser(document.fileName, model) { parser ->
             KotlinImportCompletion.complete(

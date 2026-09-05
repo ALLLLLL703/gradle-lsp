@@ -116,10 +116,7 @@ try {
     },
   });
 
-  await Promise.race([
-    diagnostics,
-    new Promise((_, reject) => setTimeout(() => reject(new Error("Diagnostics timed out")), 180_000)),
-  ]);
+  await withTimeout(diagnostics, 180_000, "Diagnostics");
   await request("textDocument/documentSymbol", { textDocument: { uri: scriptUri } });
   await request("textDocument/definition", withDocument(positionOf("kotlinStdlibSources", 2)));
 
@@ -235,7 +232,7 @@ try {
   }
 
   const semanticCompletionDurationsMs = [];
-  for (const [before, after, expected, kind] of [
+  for (const [before, after, expected, kind, insertion] of [
     ["dependencies { impl", "ementation\nval broken =\n", "implementation", 3],
     ["tasks.reg", "", "register", 2],
     ["repositories { mav", " }", "mavenCentral", 2],
@@ -243,6 +240,15 @@ try {
     ["val completionLocal = 42\n/* 😀 */ completionL", "ocal", "completionLocal", 10],
     ["fun completionSmart(value: Any) { if (value is String) value.sub", " }", "substring", 3],
     ["fun <T> List<T>.completionFirst(): T = first()\nlistOf(\"hi\").completionF", "", "completionFirst", 2],
+    ["fun completionFlow() { while (true) { br", " } }", "break", 14],
+    ["val completionFlag = tr", "", "true", 14],
+    ["val completionCallback: sus", " () -> Unit = TODO()", "suspend", 14],
+    ["fun completionArgs(count: Int, text: String) {}\ncompletionArgs(1, te", ")", "text", 6, "text = "],
+    ["fun completionCall(count: Int) {}\ncompletionC", "all()", "completionCall", 2, "completionCall"],
+    ["class CompletionType(val count: Int)\nCompletionT", "", "CompletionType", 7, "CompletionType()"],
+    ["String::sub", "", "substring", 3, "substring"],
+    ["val completionTemplate = \"value \${tr", "}\"", "true", 14],
+    ["dependencies { ", " }", "add", 2],
   ]) {
     const text = `${scriptText}\n${before}${after}`;
     const prefixLines = `${scriptText}\n${before}`.split("\n");
@@ -258,7 +264,7 @@ try {
     );
     semanticCompletionDurationsMs.push(Math.round(performance.now() - startedAt));
     const item = result?.items?.find((candidate) => candidate.label === expected);
-    if (item?.kind !== kind || item.textEdit?.newText !== expected || !item.detail) {
+    if (item?.kind !== kind || item.textEdit?.newText !== (insertion ?? expected + ([2, 3].includes(kind) ? "()" : "")) || !item.detail) {
       throw new Error(`Missing semantic completion for ${expected}: ${JSON.stringify(result)}`);
     }
     if (expected === "completionFirst" && !item.detail.includes("String")) {

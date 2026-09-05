@@ -56,17 +56,48 @@ run alongside these scenarios.
   synthetic scopes and candidates are not retained in a completion cache. Local
   analysis uses the bundled stdlib when Gradle model loading is unavailable.
 - LSP mapping remains separate. Items have specific kinds, readable compiler-rendered
-  detail, plain identifier insertion and UTF-16 `TextEdit`s. Protocol snapshot checks
+  detail, capability-negotiated callable snippets or plaintext `name()` insertion and UTF-16 `TextEdit`s. Existing call syntax, callable references, type positions and simple string-template entries retain identifier-only edits. Protocol snapshot checks
   before/after analysis are unchanged.
 
-## Deliberately remaining for Stage 2
+## General completion contexts and insertion
 
-Broad context-aware keywords, named arguments, call parentheses/snippets and snippet
-capability negotiation are not implemented here. Header `import` keyword completion
-retains its existing short-circuit behaviour (including a blank legal header); Stage
-2 can merge keyword and semantic candidates through the shared completion seam.
-There is no auto-import index, expected-type/smart completion ranking, Groovy engine,
-or guarantee of completion in every compiler-error-recovery shape.
+- Keyword candidates come from Kotlin `KtTokens.KEYWORDS`/`SOFT_KEYWORDS`. Each
+  matching candidate is reparsed at the PSI caret with a small compiler-input
+  continuation; the parser must recognize the keyword outside an error node.
+  PSI declaration/type/expression context, modifier compatibility and lexical
+  receiver/function/loop boundaries further restrict candidates. Verified headers,
+  declarations and modifiers include `package`, `import`, `val`, `var`, `fun`,
+  `class`, `interface`, `object`, `typealias`, visibility, modality, `data`,
+  `inline` and `suspend`; function types support `suspend`.
+- Expressions include `if`, `when`, `try`, `throw`, literals and object expressions;
+  statement contexts support `for`, `while`, `do`. Unlabelled `return` is offered
+  inside block-bodied named functions, `break`/`continue` inside loops without
+  crossing function/class boundaries, `this` with an implicit receiver and `super`
+  inside a class receiver context. Comments, character/string text and simple
+  `$name` template entries exclude keywords; `${expression}` supports ordinary
+  semantic and keyword completion. Malformed initializers/unclosed blocks are tested.
+- Legal header `import` is merged with keywords and useful semantic candidates,
+  including an empty header. Import directive bodies still use import-only lookup.
+- Named arguments use compiler resolved calls and ambiguous reference targets,
+  stable parameter names, supplied positional/named argument PSI and compiler
+  subtype constraints (including explicit type arguments). Supplied parameters
+  are excluded, mismatching overloads rejected, and distinct viable signatures
+  retained. Existing `=` is preserved. No source-text callee guessing is used.
+- Function/method and concrete constructor items show compiler signatures. With
+  negotiated `completionItem.snippetSupport`, required parameters become escaped
+  snippet placeholders and a final tab stop. Defaults/varargs are omitted.
+  Plaintext clients receive `name()` without snippet syntax. Existing parentheses,
+  type arguments, trailing lambdas, receiver dots, type positions and callable
+  references are not overwritten or doubled. `String::substring` uses the compiler
+  double-colon receiver type; constructor overloads remain separate.
+
+This is not exhaustive IntelliJ parity: no auto-import index, expected-type/smart
+ranking, lambda-body generation, labelled/nonlocal return completion, complete
+modifier applicability checking, or guarantee for every malformed PSI recovery
+shape. Named arguments depend on targets retained by compiler recovery (no separate
+IDE resolve-all-candidates session); Java unstable/synthetic parameter names are
+excluded. A 128-item response may omit lower-ranked extensions at a blank prefix.
+Groovy and other LSP features remain outside this change.
 
 ## Executable validation
 
@@ -112,3 +143,18 @@ attribute the remaining native footprint. The 57–81 MiB pre-attach margin is s
 variable: **robust final memory acceptance remains open**, not satisfied by these
 two below-limit samples. Stage 2 must retain the extended workload and validate
 again, rather than treating this focused optimization as a memory guarantee.
+
+## Stage 2 validation checkpoint
+
+The integrated suite additionally verifies keyword negatives, string-template
+expressions, malformed named calls, overload constraints and already-supplied
+arguments, snippet negotiation/plaintext fallback, constructor overloads, existing
+call syntax, callable references and UTF-16 edits. Existing scope/shadowing,
+real-Gradle receiver and running/queued stale-snapshot scenarios remain intact.
+The packaged workload retains every previous operation and now adds nine successive
+contexts: loop/literal/type keywords, named arguments, existing calls, constructors,
+callable references, string templates and blank-prefix Gradle receiver completion.
+The first completed extended run peaked at **1,009,332 KiB** (semantic requests
+252–1,121 ms); this narrow margin is not robust final memory acceptance. The
+validation script now clears its diagnostics timeout after completion rather than
+keeping Node alive for three minutes. No workload or JVM limits were reduced.

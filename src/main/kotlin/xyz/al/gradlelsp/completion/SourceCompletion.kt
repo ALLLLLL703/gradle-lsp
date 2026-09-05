@@ -4,7 +4,7 @@ import xyz.al.gradlelsp.analysis.AnalysisDocument
 
 internal enum class SourceCompletionKind {
     PACKAGE, CLASS, INTERFACE, ENUM, ENUM_MEMBER, TYPE_ALIAS, TYPE_PARAMETER,
-    VARIABLE, PROPERTY, FUNCTION, METHOD, KEYWORD,
+    VARIABLE, PROPERTY, FUNCTION, METHOD, KEYWORD, PARAMETER,
 }
 
 internal data class SourceCompletionItem(
@@ -16,6 +16,7 @@ internal data class SourceCompletionItem(
     val kind: SourceCompletionKind = SourceCompletionKind.PACKAGE,
     val detail: String? = null,
     val sortText: String = qualifiedName,
+    val snippetText: String? = null,
 )
 
 internal data class SourceCompletions(

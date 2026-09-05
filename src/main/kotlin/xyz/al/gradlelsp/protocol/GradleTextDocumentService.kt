@@ -148,6 +148,10 @@ internal class GradleTextDocumentService(
         )
     }
 
+    @Volatile private var completionSnippets = false
+
+    fun configureCompletion(snippetSupport: Boolean) { completionSnippets = snippetSupport }
+
     override fun completion(params: CompletionParams): CompletableFuture<Either<List<CompletionItem>, CompletionList>> {
         val snapshot = documents.current(params.textDocument.uri)
             ?: return CompletableFuture.completedFuture(emptyCompletions())
@@ -163,7 +167,7 @@ internal class GradleTextDocumentService(
                     )
                     if (!documents.isCurrent(snapshot)) return@supplyAsync emptyCompletions()
 
-                    Either.forRight(LspCompletionMapper.map(snapshot.text, completions))
+                    Either.forRight(LspCompletionMapper.map(snapshot.text, completions, completionSnippets))
                 } catch (failure: Exception) {
                     logger.log(
                         "gradle-lsp: completion failed for ${snapshot.uri}: " +

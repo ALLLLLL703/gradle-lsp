@@ -254,7 +254,7 @@ class GradleImportCompletionIntegrationTest {
     }
 
     @Test
-    fun `import keyword completion uses recovered header PSI without loading a Gradle model`() {
+    fun `import keyword completion merges recovered header PSI with general candidates`() {
         val uri = temporaryDirectory.resolve("build.gradle.kts").toUri().toString()
         val documents = DocumentStore()
         val modelCalls = AtomicInteger()
@@ -277,7 +277,7 @@ class GradleImportCompletionIntegrationTest {
                 "package xyz.al.gradlelsp.fixture\nim$CARET\nimport java.util.List",
             )) {
                 val (text, result) = complete(input)
-                val item = result.items.single()
+                val item = result.items.single { it.label == "import" }
                 assertEquals("import", item.label)
                 assertEquals(CompletionItemKind.Keyword, item.kind)
                 assertEquals("import ", item.textEdit.left.newText)
@@ -287,7 +287,7 @@ class GradleImportCompletionIntegrationTest {
                 assertTrue("import".startsWith(replaced), replaced)
                 if (input.startsWith("/*")) assertEquals(Position(0, 9), edit.range.start)
             }
-            assertEquals(0, modelCalls.get(), "Header import keyword completion must not load a model")
+            assertTrue(modelCalls.get() > 0, "Legal headers must also request useful semantic candidates")
             for (input in listOf(
                 "val before = 1\nim$CARET",
                 "fun f() { im$CARET }",

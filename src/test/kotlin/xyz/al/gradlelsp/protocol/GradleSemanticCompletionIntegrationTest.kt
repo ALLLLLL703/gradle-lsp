@@ -140,6 +140,90 @@ class GradleSemanticCompletionIntegrationTest {
     }
 
     @Test
+    fun `keywords named arguments and callable edits use recovered contexts and negotiated snippets`() {
+        val documents = DocumentStore()
+        val uri = temporaryDirectory.resolve("build.gradle.kts").toUri().toString()
+        val engine = KotlinFileNavigationEngine(modelProvider = { error("model unavailable") })
+        val analyzer = object : DocumentAnalyzer { override fun analyze(document: AnalysisDocument) = emptyList<SourceDiagnostic>() }
+        GradleTextDocumentService(documents = documents, analyzer = analyzer, navigation = engine).use { service ->
+            val server = GradleLanguageServer(textDocuments = service)
+            var version = 0
+            fun complete(marked: String, snippets: Boolean = false): org.eclipse.lsp4j.CompletionList {
+                server.initialize(org.eclipse.lsp4j.InitializeParams().apply {
+                    capabilities = org.eclipse.lsp4j.ClientCapabilities().apply {
+                        textDocument = org.eclipse.lsp4j.TextDocumentClientCapabilities().apply {
+                            completion = org.eclipse.lsp4j.CompletionCapabilities().apply {
+                                completionItem = org.eclipse.lsp4j.CompletionItemCapabilities().apply { snippetSupport = snippets }
+                            }
+                        }
+                    }
+                }).get()
+                val text = marked.replace("<caret>", "")
+                documents.open(uri, ++version, text)
+                return service.completion(CompletionParams(TextDocumentIdentifier(uri),
+                    Utf16LineMap(text).positionAt(marked.indexOf("<caret>")))).get(30, TimeUnit.SECONDS).right
+            }
+            fun keywords(marked: String) = complete(marked).items.filter { it.kind == org.eclipse.lsp4j.CompletionItemKind.Keyword }.map { it.label }
+            for (keyword in listOf("val", "var", "fun", "class", "interface", "object", "private", "public", "internal", "data", "sealed", "open", "abstract", "typealias", "suspend", "inline")) {
+                assertContains(keywords(keyword.take(2) + "<caret>"), keyword)
+            }
+            val header = complete("<caret>")
+            assertContains(header.items.map { it.label }, "import")
+            assertTrue(header.items.any { it.kind != org.eclipse.lsp4j.CompletionItemKind.Keyword })
+            for (keyword in listOf("if", "when", "try", "throw", "true", "false", "null", "object")) {
+                assertContains(keywords("val value = " + keyword.take(2) + "<caret>"), keyword)
+            }
+            for (keyword in listOf("for", "while", "do", "return")) {
+                assertContains(keywords("fun use() { " + keyword.take(2) + "<caret>\nval broken ="), keyword)
+            }
+            assertContains(keywords("fun use() { while (true) { br<caret> } }"), "break")
+            assertContains(keywords("fun use() { for (x in 1..2) { con<caret> } }"), "continue")
+            assertContains(keywords("fun String.use() { th<caret> }"), "this")
+            assertContains(keywords("open class Parent\nclass Child : Parent() { fun use() { sup<caret> } }"), "super")
+            assertContains(keywords("val value: sus<caret> () -> Unit = TODO()"), "suspend")
+            for (marked in listOf("br<caret>", "contin<caret>", "ret<caret>", "sup<caret>", "val x = cla<caret>",
+                "fun use() { pri<caret> }", "val x: va<caret> = TODO()", "\"text va<caret>\"", "// va<caret>",
+                "\"text \$va<caret>\"", "fun use() { while(true) { fun nested() { br<caret> } } }")) {
+                assertTrue(keywords(marked).isEmpty(), "$marked: ${keywords(marked)}")
+            }
+            assertContains(keywords("val x = \"text \${tr<caret>}\""), "true")
+            assertTrue(complete("val localValue = 1\nval x = \"text \${loc<caret>}\"").items.any { it.label == "localValue" })
+            val definitions = "fun choose(count: Int, text: String) {}\nfun choose(count: String, other: Boolean) {}\n"
+            fun named(marked: String) = complete(definitions + marked).items.filter { it.textEdit.left.newText.endsWith(" = ") }
+            for (name in listOf("count", "text", "other")) assertContains(named("choose(<caret>)").map { it.label }, name)
+            assertContains(named("choose(1, te<caret>)").map { it.label }, "text")
+            assertFalse(named("choose(1, ot<caret>)").any { it.label == "other" })
+            assertFalse(named("choose(count = 1, co<caret>)").any { it.label == "count" })
+            assertContains(named("choose(count = 1, te<caret>\nval broken =").map { it.label }, "text")
+            assertContains(named("choose(te<caret>, count = 1)").map { it.label }, "text")
+            assertTrue(complete("fun <T> generic(first: T, second: T) {}\ngeneric<Int>(\"wrong\", sec<caret>)").items.none { it.textEdit.left.newText == "second = " })
+            assertEquals("text", complete(definitions + "choose(count = 1, te<caret> = \"value\")").items.single { it.label == "text" }.textEdit.left.newText)
+            val function = "fun callable(count: Int, text: String = \"default\") {}\n/* 😀 */ cal<caret>lable"
+            val plain = complete(function).items.single { it.label == "callable" }
+            assertEquals("callable()", plain.textEdit.left.newText)
+            assertEquals(org.eclipse.lsp4j.InsertTextFormat.PlainText, plain.insertTextFormat)
+            val snippet = complete(function, true).items.single { it.label == "callable" }
+            assertEquals("callable(\${1:count})\$0", snippet.textEdit.left.newText)
+            assertEquals(org.eclipse.lsp4j.InsertTextFormat.Snippet, snippet.insertTextFormat)
+            assertEquals(9, snippet.textEdit.left.range.start.character)
+            assertEquals(17, snippet.textEdit.left.range.end.character)
+            for (suffix in listOf("()", "<Int>()", " { }", ".toString()")) {
+                val result = complete("fun <T> callable() {}\ncal<caret>" + suffix, true)
+                assertTrue(result.items.any { it.label == "callable" }, "$suffix: $result")
+                val item = result.items.single { it.label == "callable" }
+                assertEquals("callable", item.textEdit.left.newText, suffix)
+            }
+            assertEquals("callable", complete("fun callable() {}\n::cal<caret>", true).items.single { it.label == "callable" }.textEdit.left.newText)
+            val referenceItems = complete("String::sub<caret>", true)
+            assertTrue(referenceItems.items.any { it.label == "substring" }, referenceItems.toString())
+            assertEquals("substring", referenceItems.items.first { it.label == "substring" }.textEdit.left.newText)
+            assertEquals("Local", complete("class Local(val count: Int)\nval x: Loc<caret> = TODO()", true).items.single { it.label == "Local" }.textEdit.left.newText)
+            assertEquals(2, complete("class Overloaded { constructor(count: Int); constructor(text: String) }\nOverlo<caret>", true).items.count { it.label == "Overloaded" })
+            assertEquals("Local(\${1:count})\$0", complete("class Local(val count: Int)\nLoc<caret>", true).items.single { it.label == "Local" }.textEdit.left.newText)
+        }
+    }
+
+    @Test
     fun `real Gradle receivers and default extension imports complete through LSP with UTF16 edits`() {
         val script = Path.of("build.gradle.kts").toAbsolutePath().normalize()
         val model = GradleKotlinDslModelLoader().modelFor(script)

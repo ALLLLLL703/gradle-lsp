@@ -11,7 +11,7 @@ import xyz.al.gradlelsp.completion.SourceCompletions
 import xyz.al.gradlelsp.completion.SourceCompletionKind
 
 internal object LspCompletionMapper {
-    fun map(documentText: String, completions: SourceCompletions): CompletionList {
+    fun map(documentText: String, completions: SourceCompletions, snippetSupport: Boolean = false): CompletionList {
         val lines = Utf16LineMap(documentText)
         return CompletionList(
             completions.isIncomplete,
@@ -30,16 +30,17 @@ internal object LspCompletionMapper {
                         SourceCompletionKind.PROPERTY -> CompletionItemKind.Property
                         SourceCompletionKind.FUNCTION -> CompletionItemKind.Function
                         SourceCompletionKind.METHOD -> CompletionItemKind.Method
+                        SourceCompletionKind.PARAMETER -> CompletionItemKind.Variable
                         SourceCompletionKind.KEYWORD -> CompletionItemKind.Keyword
                     }
                     detail = candidate.detail ?: "(${candidate.kind.name.lowercase()}) ${candidate.qualifiedName}"
                     filterText = candidate.name
                     sortText = candidate.sortText
-                    insertTextFormat = InsertTextFormat.PlainText
+                    insertTextFormat = if (snippetSupport && candidate.snippetText != null) InsertTextFormat.Snippet else InsertTextFormat.PlainText
                     textEdit = Either.forLeft(
                         TextEdit(
                             Range(lines.positionAt(candidate.startOffset), lines.positionAt(candidate.endOffset)),
-                            candidate.insertText,
+                            if (snippetSupport) candidate.snippetText ?: candidate.insertText else candidate.insertText,
                         ),
                     )
                 }

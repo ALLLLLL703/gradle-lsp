@@ -60,6 +60,7 @@ internal class GradleLanguageServer(
             }
         textDocuments.configureWorkspaceRoots(workspaceRoots)
 
+        textDocuments.configureCompletion(params.capabilities?.textDocument?.completion?.completionItem?.snippetSupport == true)
         val documentSymbols = params.capabilities?.textDocument?.documentSymbol
         textDocuments.configureDocumentSymbols(
             hierarchical = documentSymbols?.hierarchicalDocumentSymbolSupport == true,

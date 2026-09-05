@@ -23,6 +23,8 @@ import org.jetbrains.kotlin.incremental.components.NoLookupLocation
 import org.jetbrains.kotlin.load.java.descriptors.JavaClassDescriptor
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.name.render
+import org.jetbrains.kotlin.psi.KtCallableReferenceExpression
+import org.jetbrains.kotlin.psi.KtSimpleNameStringTemplateEntry
 import org.jetbrains.kotlin.psi.KtCallExpression
 import org.jetbrains.kotlin.psi.KtElement
 import org.jetbrains.kotlin.psi.KtExpression
@@ -102,9 +104,12 @@ internal object KotlinSemanticCompletion {
             range.endOffset - IDENTIFIER.length, reference.parent is KtUserType)
     }
 
-    fun complete(parser: KotlinAstParser, position: KotlinCompletionContext): SourceCompletions {
-        val binding = parser.bindingContext(position.file)
+    fun complete(parser: KotlinAstParser, position: KotlinCompletionContext,
+        binding: BindingContext = parser.bindingContext(position.file)): SourceCompletions {
         val reference = position.reference
+        val namedArguments = KotlinNamedArgumentCompletion.complete(position, binding)
+        if (reference.parent is org.jetbrains.kotlin.psi.KtValueArgumentName)
+            return SourceCompletions(namedArguments.take(MAXIMUM_ITEMS), namedArguments.size > MAXIMUM_ITEMS)
         val scope = generateSequence(reference as KtElement?) { it.parent as? KtElement }
             .firstNotNullOfOrNull { binding[BindingContext.LEXICAL_SCOPE, it] } ?: return SourceCompletions.EMPTY
         val kindFilter = if (position.typePosition) DescriptorKindFilter.CLASSIFIERS
@@ -115,10 +120,11 @@ internal object KotlinSemanticCompletion {
                 (call.parent as? KtQualifiedExpression)?.takeIf { it.selectorExpression === call }
             }
         val userQualifier = (reference.parent as? KtUserType)?.qualifier?.referenceExpression
-        val receiverExpression = qualified?.receiverExpression ?: userQualifier
+        val callableReference = reference.parent as? KtCallableReferenceExpression
+        val receiverExpression = qualified?.receiverExpression ?: userQualifier ?: callableReference?.receiverExpression
         val implicit = visibleImplicitReceivers(scope)
         val explicit = receiverExpression?.let { expression ->
-            binding.getType(expression)?.takeUnless { it.isError }?.let { ExpressionReceiver.create(expression, it, binding) }
+            (binding.getType(expression) ?: binding[BindingContext.DOUBLE_COLON_LHS, expression]?.type)?.takeUnless { it.isError }?.let { ExpressionReceiver.create(expression, it, binding) }
         }
         val receivers = if (receiverExpression != null) listOfNotNull(explicit) else implicit
         val receiverVariants = receivers.flatMapIndexed { index, receiver ->
@@ -197,9 +203,39 @@ internal object KotlinSemanticCompletion {
                 if (extension == null) shadowed.add(key)
                 else key !in shadowed && shadowed.add("$key@${RENDERER.renderType(extension.type)}")
             }
-            .map { candidate -> item(candidate.descriptor, position.startOffset, position.endOffset).copy(
-                sortText = candidate.rank.toString().padStart(3, '0') + ":" + candidate.descriptor.name.asString() + ":" + candidate.signature) }
-        return SourceCompletions(matches.take(MAXIMUM_ITEMS), matches.size > MAXIMUM_ITEMS)
+            .flatMap { candidate -> insertionItems(candidate.descriptor, position, scope).map { it.copy(
+                sortText = candidate.rank.toString().padStart(3, '0') + ":" + candidate.descriptor.name.asString() + ":" + candidate.signature) } }
+        val merged = (namedArguments + matches).sortedBy { it.sortText }
+        return SourceCompletions(merged.take(MAXIMUM_ITEMS), merged.size > MAXIMUM_ITEMS)
+    }
+
+    private fun insertionItems(descriptor: DeclarationDescriptor, position: KotlinCompletionContext,
+        scope: LexicalScope): List<SourceCompletionItem> {
+        val base = item(descriptor, position.startOffset, position.endOffset)
+        val reference = position.reference
+        val call = reference.parent as? KtCallExpression
+        val invocation = !position.typePosition && reference.parent !is KtCallableReferenceExpression &&
+            reference.parent !is KtSimpleNameStringTemplateEntry &&
+            (reference.parent as? KtQualifiedExpression)?.receiverExpression !== reference &&
+            (call == null || (call.valueArgumentList == null && call.typeArgumentList == null && call.lambdaArguments.isEmpty()))
+        if (!invocation) return listOf(base)
+        val functions = when (descriptor) {
+            is FunctionDescriptor -> listOf(descriptor)
+            is ClassDescriptor -> if (descriptor.kind == ClassKind.CLASS && descriptor.modality != org.jetbrains.kotlin.descriptors.Modality.ABSTRACT)
+                descriptor.constructors.filter { DescriptorVisibilities.isVisibleIgnoringReceiver(it, scope.ownerDescriptor, false) }
+                else emptyList()
+            is TypeAliasDescriptor -> descriptor.constructors.toList()
+            else -> emptyList()
+        }
+        if (functions.isEmpty()) return listOf(base)
+        return functions.map { function ->
+            val required = function.valueParameters.filter { !it.declaresDefaultValue() && it.varargElementType == null }
+            val arguments = required.mapIndexed { index, parameter ->
+                "\${" + (index + 1) + ":" + parameter.name.render().replace("\\", "\\\\").replace("$", "\\$").replace("}", "\\}") + "}"
+            }.joinToString(", ")
+            base.copy(insertText = base.insertText + "()", snippetText = base.insertText.replace("$", "\\$") + "(" + arguments + ")\$0",
+                detail = signature(function))
+        }
     }
 
     private data class CompletionCandidate(val descriptor: DeclarationDescriptor, val rank: Int) {
