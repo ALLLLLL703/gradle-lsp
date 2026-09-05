@@ -141,6 +141,26 @@ class GradleSemanticCompletionIntegrationTest {
             }
             val receiverShadow = complete("class C { val shared = \"member\"; fun use() { val shared = 42; sha<caret> } }").items.single { it.name == "shared" }
             assertTrue(receiverShadow.detail!!.contains("Int"), receiverShadow.toString())
+            KotlinAstParser().use { parser ->
+                val nestedScopes = listOf(
+                    "class C { val shared = \"member\"; fun use() { val shared = 42; run { sha<caret> } } }" to "kotlin.Int",
+                    "class C { val shared = \"member\"; fun use() { val shared = 42; run { if (true) { run { sha<caret> } } } } }" to "kotlin.Int",
+                    "class D { val shared = true }; class C { val shared = \"member\"; fun use() { val shared = 42; with(D()) { run { sha<caret> } } } }" to "kotlin.Int",
+                    "class D { val shared = true }; class C { val shared = \"member\"; fun use() { with(D()) { run { sha<caret> } } } }" to "kotlin.Boolean",
+                    "class C { val shared = \"member\"; fun use() { run { sha<caret> } } }" to "kotlin.String",
+                    "class C { val shared = \"member\"; fun use() { val shared = 42; run { sha<caret>\nval broken =" to "kotlin.Int",
+                )
+                for ((marked, expectedType) in nestedScopes) {
+                    val item = complete(marked).items.single { it.name == "shared" }
+                    assertTrue(item.detail!!.contains(expectedType), "$marked: $item")
+                    val file = parser.parse("build.gradle.kts", marked.replace("sha<caret>", "shared"))
+                    if (marked.contains("broken")) assertTrue(file.syntaxDiagnostics().isNotEmpty())
+                    val reference = org.jetbrains.kotlin.com.intellij.psi.util.PsiTreeUtil.collectElementsOfType(file.psi,
+                        org.jetbrains.kotlin.psi.KtNameReferenceExpression::class.java).last { it.getReferencedName() == "shared" }
+                    val target = assertNotNull(parser.bindingContext(file)[org.jetbrains.kotlin.resolve.BindingContext.REFERENCE_TARGET, reference])
+                    assertEquals(xyz.al.gradlelsp.completion.KotlinSemanticCompletion.item(target, 0, 0).detail, item.detail, marked)
+                }
+            }
             val dsl = "@DslMarker annotation class Marker\n@Marker class Outer { fun outerOnly() {} }\n" +
                 "@Marker class Inner { fun innerOnly() {} }\nfun Outer.nest(block: Inner.() -> Unit) {}\n" +
                 "fun Outer.use() { nest { out<caret> } }"

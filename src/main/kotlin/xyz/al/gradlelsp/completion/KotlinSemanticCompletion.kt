@@ -46,6 +46,7 @@ import org.jetbrains.kotlin.resolve.calls.inference.ConstraintSystemBuilderImpl
 import org.jetbrains.kotlin.resolve.calls.inference.constraintPosition.ConstraintPositionKind
 import org.jetbrains.kotlin.resolve.calls.smartcasts.DataFlowValueFactoryImpl
 import org.jetbrains.kotlin.resolve.scopes.DescriptorKindFilter
+import org.jetbrains.kotlin.resolve.scopes.HierarchicalScope
 import org.jetbrains.kotlin.resolve.scopes.ImportingScope
 import org.jetbrains.kotlin.resolve.scopes.LexicalScope
 import org.jetbrains.kotlin.resolve.scopes.receivers.ExpressionReceiver
@@ -123,13 +124,33 @@ internal object KotlinSemanticCompletion {
         val callableReference = reference.parent as? KtCallableReferenceExpression
         val receiverExpression = qualified?.receiverExpression ?: userQualifier ?: callableReference?.receiverExpression
         val implicit = visibleImplicitReceivers(scope)
+        val levels = scope.parentsWithSelf.toList()
+        val declarationRanks = mutableMapOf<HierarchicalScope, Int>()
+        val receiverRanks = mutableMapOf<ReceiverValue, Int>()
+        var nextRank = 1 // explicit members/qualifiers precede lexical candidates
+        // Like the compiler scope tower, local declarations precede implicit receiver members,
+        // even when a nearer lambda introduces its own receiver. Nonlocal scopes and their
+        // receivers then follow the same lexical hierarchy, not independent depth/index scales.
+        levels.filterIsInstance<LexicalScope>().filter { it.kind.withLocalDescriptors }.forEach {
+            declarationRanks[it] = nextRank++
+        }
+        levels.filterIsInstance<LexicalScope>().forEach { level ->
+            if (!level.kind.withLocalDescriptors) declarationRanks[level] = nextRank++
+            (listOfNotNull(level.implicitReceiver) + level.contextReceiversGroup).forEach { receiver ->
+                if (receiver.value in implicit) receiverRanks.putIfAbsent(receiver.value, nextRank++)
+            }
+        }
+        val extensionRank = nextRank
+        nextRank += levels.size
+        levels.filterIsInstance<ImportingScope>().forEach { declarationRanks[it] = nextRank++ }
         val explicit = receiverExpression?.let { expression ->
             (binding.getType(expression) ?: binding[BindingContext.DOUBLE_COLON_LHS, expression]?.type)?.takeUnless { it.isError }?.let { ExpressionReceiver.create(expression, it, binding) }
         }
         val receivers = if (receiverExpression != null) listOfNotNull(explicit) else implicit
-        val receiverVariants = receivers.flatMapIndexed { index, receiver ->
+        val receiverVariants = receivers.flatMap { receiver ->
             receiverTypes(receiver, binding, scope, reference, qualified is KtSafeQualifiedExpression).map { type ->
-                ReceiverCandidate(if (receiver is ExpressionReceiver) receiver.replaceType(type) else receiver, type, index + 1)
+                ReceiverCandidate(if (receiver is ExpressionReceiver) receiver.replaceType(type) else receiver, type,
+                    if (receiverExpression != null) 0 else receiverRanks.getValue(receiver))
             }
         }
         val candidates = mutableListOf<CompletionCandidate>()
@@ -178,7 +199,7 @@ internal object KotlinSemanticCompletion {
             }
         }
         // ImportingScope's alias-aware enumeration preserves the name actually visible at the caret.
-        scope.parentsWithSelf.forEachIndexed { depth, level ->
+        levels.forEachIndexed { depth, level ->
             val declarations = if (level is ImportingScope) level.getContributedDescriptors(kindFilter, nameFilter, true)
                 else level.getContributedDescriptors(kindFilter, nameFilter)
             val memberExtensions = if (level is LexicalScope && level.implicitReceiver?.value in implicit) level.implicitReceiver?.type?.memberScope
@@ -189,10 +210,10 @@ internal object KotlinSemanticCompletion {
                 val callable = descriptor as? CallableDescriptor
                 if (callable?.extensionReceiverParameter != null) {
                     receiverVariants.forEach { (receiver, type) ->
-                        substituteExtension(callable, type)?.let { add(it, 100 + depth, receiver) }
+                        substituteExtension(callable, type)?.let { add(it, extensionRank + depth, receiver) }
                     }
                 } else if (receiverExpression == null && descriptor !in memberExtensions) {
-                    add(descriptor, if (level is ImportingScope) 200 + depth else depth)
+                    add(descriptor, declarationRanks.getValue(level))
                 }
             }
         }
