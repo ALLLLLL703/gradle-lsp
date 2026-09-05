@@ -145,7 +145,9 @@ internal object KotlinSemanticCompletion {
             candidates += CompletionCandidate(descriptor, rank)
         }
         if (receiverExpression != null) {
-            val target = (receiverExpression as? KtReferenceExpression)?.let { binding[BindingContext.REFERENCE_TARGET, it] }
+            val qualifierReference = (if (receiverExpression is KtQualifiedExpression) receiverExpression.selectorExpression
+                else receiverExpression) as? KtReferenceExpression
+            val target = qualifierReference?.let { binding[BindingContext.REFERENCE_TARGET, it] }
             val staticScopes = when (target) {
                 is ClassDescriptor -> listOf(target.staticScope, target.unsubstitutedInnerClassesScope) +
                     listOfNotNull(target.companionObjectDescriptor?.defaultType?.memberScope)

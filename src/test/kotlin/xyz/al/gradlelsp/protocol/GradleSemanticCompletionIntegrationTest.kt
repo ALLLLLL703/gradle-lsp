@@ -120,6 +120,14 @@ class GradleSemanticCompletionIntegrationTest {
             assertContains(names("class C { fun String.memberExtension() = length; fun use() { \"hi\".memberE<caret> } }"), "memberExtension")
             assertFalse("memberExtension" in names("class C { fun String.memberExtension() = length }\n\"hi\".memberE<caret>"))
             assertContains(names("class Outer { class Nested }\nOuter.Nes<caret>"), "Nested")
+            for (suffix in listOf("", "\nval broken =")) {
+                val constructors = complete("java.util.Arr<caret>$suffix").items.filter { it.name == "ArrayList" }
+                assertTrue(constructors.isNotEmpty())
+                assertTrue(constructors.all { it.insertText == "ArrayList()" && it.snippetText != null })
+                assertContains(names("java.util.Collections.emptyL<caret>$suffix"), "emptyList")
+                assertContains(names("java.util.Map.Ent<caret>$suffix"), "Entry")
+                assertContains(names("val value: java.util.Arr<caret> = TODO()$suffix"), "ArrayList")
+            }
             val receiverShadow = complete("class C { val shared = \"member\"; fun use() { val shared = 42; sha<caret> } }").items.single { it.name == "shared" }
             assertTrue(receiverShadow.detail!!.contains("Int"), receiverShadow.toString())
             val dsl = "@DslMarker annotation class Marker\n@Marker class Outer { fun outerOnly() {} }\n" +
