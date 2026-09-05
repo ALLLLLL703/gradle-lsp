@@ -274,7 +274,12 @@ internal object KotlinSemanticCompletion {
             if (value.isStable) flow?.getCollectedTypes(value, settings)?.let(::addAll)
         }
         val nonNull = safe || (value.isStable && flow?.getStableNullability(value)?.canBeNull() == false)
-        return types.filterNot { it.isError }.map { if (nonNull) TypeUtils.makeNotNullable(it) else it }.distinct()
+        val refined = types.filterNot { it.isError }.map { if (nonNull) TypeUtils.makeNotNullable(it) else it }.distinct()
+        // A refined member scope already includes inherited members and resolves their overrides.
+        // Do not let the original supertype's signature win presentation deduplication.
+        return refined.filter { type -> refined.none { other ->
+            KotlinTypeChecker.DEFAULT.isSubtypeOf(other, type) && !KotlinTypeChecker.DEFAULT.isSubtypeOf(type, other)
+        } }
     }
 
     /** Infer only from the receiver. Unconstrained callable parameters stay generic until invocation. */

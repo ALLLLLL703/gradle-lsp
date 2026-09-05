@@ -107,6 +107,17 @@ class GradleSemanticCompletionIntegrationTest {
             assertFalse(unconstrained.detail.contains("ERROR"), unconstrained.toString())
             assertFalse("onlyNumbers" in names("fun <T : Number> List<T>.onlyNumbers() = size\nlistOf(\"hi\").onlyN<caret>"))
             assertContains(names("fun use(value: Any) { if (value is String) value.sub<caret> }"), "substring")
+            val smartcastTypes = "open class Base { open fun provide(): Any = 1; fun preserved() = 1 }\n" +
+                "class Derived : Base() { override fun provide(): String = \"x\" }\n"
+            for (use in listOf("fun use(x: Base) { if (x is Derived) x.prov<caret> }",
+                "fun use(x: Base?) { if (x is Derived) x?.prov<caret> }",
+                "fun use(x: Base) { if (x is Derived) { x.prov<caret>\nval broken =")) {
+                val refined = complete(smartcastTypes + use).items.single { it.name == "provide" }
+                assertTrue(refined.detail!!.contains("kotlin.String"), "$use: $refined")
+            }
+            assertContains(names(smartcastTypes + "fun use(x: Base) { if (x is Derived) x.pres<caret> }"), "preserved")
+            val baseMember = complete(smartcastTypes + "fun use(x: Base) { x.prov<caret> }").items.single { it.name == "provide" }
+            assertTrue(baseMember.detail!!.contains("kotlin.Any"), baseMember.toString())
             assertContains(names("fun String.use() { sub<caret> }"), "substring")
             assertFalse("secret" in names("class Hidden { private fun secret() {} }\nHidden().sec<caret>"))
             val shadow = complete("val shared = \"outer\"\nfun use() { val shared = 42; sha<caret> }").items.single { it.name == "shared" }
