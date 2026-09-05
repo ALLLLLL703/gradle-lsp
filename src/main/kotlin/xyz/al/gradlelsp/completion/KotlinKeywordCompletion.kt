@@ -39,6 +39,10 @@ internal object KotlinKeywordCompletion {
         if (end < start) return emptyList()
         val ancestors = generateSequence(leaf.parent) { it.parent }.toList()
         val reference = leaf.parent as? KtSimpleNameExpression
+        val selector = (reference?.parent as? KtCallExpression) ?: reference
+        // Reject selector contexts before probe parsing can recover an invalid keyword as a sibling.
+        if (selector != null && (selector.parent as? KtQualifiedExpression)?.selectorExpression === selector ||
+            reference != null && (reference.parent as? KtCallableReferenceExpression)?.callableReference === reference) return emptyList()
         val declarationPosition = reference?.parent is KtScriptInitializer || reference?.parent is KtBlockExpression ||
             ancestors.takeWhile { it !is KtDeclaration }.any { it is KtClassBody || it is KtModifierList }
         if (ancestors.any { it is KtImportDirective || it is KtPackageDirective || it is KtSimpleNameStringTemplateEntry || it is KtValueArgumentName }) return emptyList()

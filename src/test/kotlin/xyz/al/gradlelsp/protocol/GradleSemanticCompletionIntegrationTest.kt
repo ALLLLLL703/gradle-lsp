@@ -192,6 +192,11 @@ class GradleSemanticCompletionIntegrationTest {
                 "\"text \$va<caret>\"", "fun use() { while(true) { fun nested() { br<caret> } } }")) {
                 assertTrue(keywords(marked).isEmpty(), "$marked: ${keywords(marked)}")
             }
+            for (marked in listOf("val s = \"x\"\ns.tr<caret>", "val s: String? = null\ns?.tr<caret>",
+                "String::tr<caret>", "val s = \"x\"\ns.tr<caret>()\nval broken =", "val s = \"x\"\ns.tr<caret>\nval broken =")) {
+                assertTrue(keywords(marked).isEmpty(), "$marked: ${keywords(marked)}")
+            }
+            assertContains(keywords("val broken =\nval x = tr<caret>"), "true")
             assertContains(keywords("val x = \"text \${tr<caret>}\""), "true")
             assertTrue(complete("val localValue = 1\nval x = \"text \${loc<caret>}\"").items.any { it.label == "localValue" })
             val definitions = "fun choose(count: Int, text: String) {}\nfun choose(count: String, other: Boolean) {}\n"
