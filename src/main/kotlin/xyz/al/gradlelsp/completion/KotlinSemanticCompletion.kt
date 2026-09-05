@@ -227,7 +227,7 @@ internal object KotlinSemanticCompletion {
             is ClassDescriptor -> if (descriptor.kind == ClassKind.CLASS && descriptor.modality != org.jetbrains.kotlin.descriptors.Modality.ABSTRACT)
                 descriptor.constructors.filter { DescriptorVisibilities.isVisibleIgnoringReceiver(it, scope.ownerDescriptor, false) }
                 else emptyList()
-            is TypeAliasDescriptor -> descriptor.constructors.toList()
+            is TypeAliasDescriptor -> descriptor.constructors.filter { DescriptorVisibilities.isVisibleIgnoringReceiver(it, scope.ownerDescriptor, false) }
             else -> emptyList()
         }
         if (functions.isEmpty()) return listOf(base)

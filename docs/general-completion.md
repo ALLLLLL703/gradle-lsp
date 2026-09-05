@@ -221,3 +221,9 @@ ordinary RSS runs at **815,836 / 837,280 KiB** with 18 threads. General completi
 were **240–849 / 308–824 ms**; external definitions **964–1,476 / 964–1,398 ms**;
 external hover **1,073 / 1,066 ms**. No `JAVA_OPTS`, NMT, forced GC or reduced
 workload was used in these final acceptance runs.
+
+Constructor insertion also applies compiler visibility to type-alias constructors;
+a visible alias of a class with a private constructor stays a type/name item, not
+an invocation snippet. The final clean 37-test suite and two unchanged packaged
+runs after that guard passed at **826,060 / 834,832 KiB**, 18 threads, general
+completion **253–737 / 297–829 ms** (no experimental launch overrides).

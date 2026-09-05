@@ -231,6 +231,8 @@ class GradleSemanticCompletionIntegrationTest {
             assertTrue(referenceItems.items.any { it.label == "substring" }, referenceItems.toString())
             assertEquals("substring", referenceItems.items.first { it.label == "substring" }.textEdit.left.newText)
             assertEquals("Local", complete("class Local(val count: Int)\nval x: Loc<caret> = TODO()", true).items.single { it.label == "Local" }.textEdit.left.newText)
+            assertEquals("Alias", complete("class Hidden private constructor(val count: Int)\ntypealias Alias = Hidden\nAli<caret>", true)
+                .items.single { it.label == "Alias" }.textEdit.left.newText)
             assertEquals(2, complete("class Overloaded { constructor(count: Int); constructor(text: String) }\nOverlo<caret>", true).items.count { it.label == "Overloaded" })
             assertEquals("Local(\${1:count})\$0", complete("class Local(val count: Int)\nLoc<caret>", true).items.single { it.label == "Local" }.textEdit.left.newText)
         }
