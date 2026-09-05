@@ -130,6 +130,12 @@ class GradleSemanticCompletionIntegrationTest {
             assertEquals(128, broad.items.size)
             assertTrue(broad.isIncomplete)
             assertEquals(broad.items.map { it.sortText }.sorted(), broad.items.map { it.sortText })
+            val constructors = complete((0..139).joinToString("\n") {
+                "class Candidate%03d(val value: Int)".format(it)
+            } + "\nCandidate<caret>")
+            assertEquals(128, constructors.items.size)
+            assertTrue(constructors.isIncomplete)
+            assertTrue(constructors.items.all { it.insertText.endsWith("()") && it.snippetText!!.contains("value") })
             val broken = "val localValue = 1\nfun use() { /* 😀 */ loc<caret>alValue\nval broken =\n"
             KotlinAstParser().use { parser -> assertTrue(parser.parse("build.gradle.kts", broken.replace("<caret>", "")).syntaxDiagnostics().isNotEmpty()) }
             val item = complete(broken).items.single { it.name == "localValue" }

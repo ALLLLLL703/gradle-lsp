@@ -281,6 +281,7 @@ try {
 
   // Optional observation only: these commands do not request GC or alter JVM limits.
   const memoryDetails = process.env.GRADLE_LSP_MEMORY_DETAILS === "1" ? {
+    native: execFileSync("jcmd", [String(server.pid), "VM.native_memory", "summary", "scale=KB"], { encoding: "utf8", timeout: 10_000 }),
     heap: execFileSync("jcmd", [String(server.pid), "GC.heap_info"], { encoding: "utf8", timeout: 10_000 }),
     metaspace: execFileSync("jcmd", [String(server.pid), "VM.metaspace", "basic=true", "scale=KB"], { encoding: "utf8", timeout: 10_000 }),
     codeCache: execFileSync("jcmd", [String(server.pid), "Compiler.codecache"], { encoding: "utf8", timeout: 10_000 }),

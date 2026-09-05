@@ -197,6 +197,7 @@ internal object KotlinSemanticCompletion {
         val shadowed = mutableSetOf<String>()
         val matches = candidates.sortedWith(compareBy<CompletionCandidate> { it.rank }
             .thenBy { it.descriptor.name.asString() }.thenBy { it.signature })
+            .asSequence()
             .filter { (descriptor) ->
                 val key = shadowKey(descriptor)
                 val extension = (descriptor as? CallableDescriptor)?.extensionReceiverParameter
@@ -205,6 +206,8 @@ internal object KotlinSemanticCompletion {
             }
             .flatMap { candidate -> insertionItems(candidate.descriptor, position, scope).map { it.copy(
                 sortText = candidate.rank.toString().padStart(3, '0') + ":" + candidate.descriptor.name.asString() + ":" + candidate.signature) } }
+            // Do not resolve constructors/render signatures for items the response cannot contain.
+            .take(MAXIMUM_ITEMS + 1).toList()
         val merged = (namedArguments + matches).sortedBy { it.sortText }
         return SourceCompletions(merged.take(MAXIMUM_ITEMS), merged.size > MAXIMUM_ITEMS)
     }

@@ -158,3 +158,20 @@ The first completed extended run peaked at **1,009,332 KiB** (semantic requests
 252–1,121 ms); this narrow margin is not robust final memory acceptance. The
 validation script now clears its diagnostics timeout after completion rather than
 keeping Node alive for three minutes. No workload or JVM limits were reduced.
+
+### Bounded completion presentation
+
+Semantic candidates now stream through shadow filtering and presentation with a
+129-item lookahead, rather than resolving every candidate's constructors and
+rendering every signature before truncating. A 140-class constructor completion
+scenario verifies bounded results, `isIncomplete` and insertion metadata. This
+preserves compiler scope enumeration and ranking; it avoids unnecessary resolution
+and presentation of candidates that cannot fit the response.
+
+On the unchanged 16-context packaged workload, full presentation peaked at
+1,009,332–1,028,832 KiB, with blank Gradle receiver completion 1,121–1,208 ms.
+After bounded presentation: 981,748–1,008,248 KiB, blank completion 765–821 ms.
+This is a concrete avoided allocation path, not sufficient RSS margin by itself.
+Optional memory details now include `VM.native_memory summary`; tracking is only
+available when explicitly enabled for observation via
+`JAVA_OPTS=-XX:NativeMemoryTracking=summary`, never required for normal launch.
