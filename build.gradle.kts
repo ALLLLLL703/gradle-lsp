@@ -54,6 +54,7 @@ application {
         "-XX:CompressedClassSpaceSize=64m",
         "-XX:MaxDirectMemorySize=64m",
         "-XX:ReservedCodeCacheSize=64m",
+        "-XX:CICompilerCount=2",
     )
 }
 

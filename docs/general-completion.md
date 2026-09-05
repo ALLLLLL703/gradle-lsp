@@ -175,3 +175,34 @@ This is a concrete avoided allocation path, not sufficient RSS margin by itself.
 Optional memory details now include `VM.native_memory summary`; tracking is only
 available when explicitly enabled for observation via
 `JAVA_OPTS=-XX:NativeMemoryTracking=summary`, never required for normal launch.
+
+### Packaged JIT memory bound and final measurement
+
+The host JVM selected **12 JIT compiler threads** by default. An observational NMT
+run measured compiler arena peak **119,746 KiB** and retained Arena Chunks
+**61,661 KiB**, with 28 process threads. Limiting `CICompilerCount=2` reduced those
+observations to **41,794 / 22,026 KiB** and 18 threads. This is a bounded JVM
+compilation-concurrency change, not a heap increase, forced GC or smaller workload.
+Two environment-override experiments peaked at **816,312 / 828,084 KiB**.
+
+The package now ships `-XX:CICompilerCount=2` alongside the unchanged heap,
+metaspace, direct memory, code-cache and stack limits. After
+`./gradlew clean test installDist`, two ordinary `node scripts/validate-rss.mjs`
+runs (no override or NMT) passed at **831,640 / 831,672 KiB** peak RSS, leaving
+about **212 MiB** below 1 GiB. All previous diagnostics/navigation/hover/import
+operations and all 16 successive general completion contexts were retained.
+
+| Production measurement | Run 1 | Run 2 |
+| --- | --- | --- |
+| Peak RSS (KiB) | 831,640 | 831,672 |
+| Threads | 18 | 18 |
+| External definitions (ms) | 1,556 / 1,242 / 914 | 1,547 / 1,283 / 972 |
+| External hover (ms) | 1,112 | 1,130 |
+| General completions (ms) | 244–1,000 | 229–857 |
+| Blank Gradle receiver completion (ms) | 1,000 | 857 |
+
+Repeated reductions and compiler-arena attribution provide substantially better
+representative headroom than the Stage 1 checkpoints; they are not an OS-enforced
+RSS guarantee on all JDKs, hosts or workspaces. Neither user installation nor push
+is part of validation. The build-file commit contains only the approved JVM flag;
+pre-existing user formatting remains unstaged and otherwise unchanged.
