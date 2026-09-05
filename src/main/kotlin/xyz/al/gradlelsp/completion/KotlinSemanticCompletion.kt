@@ -233,8 +233,12 @@ internal object KotlinSemanticCompletion {
         if (functions.isEmpty()) return listOf(base)
         return functions.map { function ->
             val required = function.valueParameters.filter { !it.declaresDefaultValue() && it.varargElementType == null }
-            val arguments = required.mapIndexed { index, parameter ->
-                "\${" + (index + 1) + ":" + parameter.name.render().replace("\\", "\\\\").replace("$", "\\$").replace("}", "\\}") + "}"
+            val parameters = if (function.hasStableParameterNames()) required
+                else function.valueParameters.take((required.lastOrNull()?.index ?: -1) + 1)
+            val arguments = parameters.mapIndexed { index, parameter ->
+                val name = parameter.name.render().replace("\\", "\\\\").replace("$", "\\$").replace("}", "\\}")
+                val named = function.hasStableParameterNames() && parameter.index != index
+                (if (named) "$name = " else "") + "\${" + (index + 1) + ":" + name + "}"
             }.joinToString(", ")
             base.copy(insertText = base.insertText + "()", snippetText = base.insertText.replace("$", "\\$") + "(" + arguments + ")\$0",
                 detail = signature(function))

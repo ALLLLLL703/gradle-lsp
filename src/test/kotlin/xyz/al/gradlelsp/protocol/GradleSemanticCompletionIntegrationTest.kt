@@ -250,6 +250,29 @@ class GradleSemanticCompletionIntegrationTest {
                 .items.single { it.label == "Alias" }.textEdit.left.newText)
             assertEquals(2, complete("class Overloaded { constructor(count: Int); constructor(text: String) }\nOverlo<caret>", true).items.count { it.label == "Overloaded" })
             assertEquals("Local(\${1:count})\$0", complete("class Local(val count: Int)\nLoc<caret>", true).items.single { it.label == "Local" }.textEdit.left.newText)
+            KotlinAstParser().use { parser ->
+                for (parameters in listOf("optional: Int = 0, required: String", "vararg values: Int, required: String",
+                    "optional: Int = 0, required: String, trailing: Int = 1")) {
+                    for (declaration in listOf("fun Callable($parameters) {}", "class Callable($parameters)",
+                        "class Callable { constructor($parameters) }", "class Target($parameters)\ntypealias Callable = Target")) {
+                        val result = complete("$declaration\nCall<caret>\nval broken =", true).items.single { it.label == "Callable" }
+                        assertEquals("Callable(required = \${1:required})\$0", result.textEdit.left.newText, declaration)
+                        val inserted = result.textEdit.left.newText.replace("\${1:required}", "\"value\"").removeSuffix("\$0")
+                        val file = parser.parse("build.gradle.kts", "$declaration\n$inserted")
+                        assertTrue(file.syntaxDiagnostics().isEmpty())
+                        val binding = parser.bindingContext(file)
+                        val call = org.jetbrains.kotlin.com.intellij.psi.util.PsiTreeUtil.collectElementsOfType(file.psi,
+                            org.jetbrains.kotlin.psi.KtCallExpression::class.java).single()
+                        val compilerCall = assertNotNull(binding[org.jetbrains.kotlin.resolve.BindingContext.CALL, call.calleeExpression])
+                        val resolved = assertNotNull(binding[org.jetbrains.kotlin.resolve.BindingContext.RESOLVED_CALL, compilerCall])
+                        assertTrue(resolved.status.isSuccess, "$declaration: ${binding.diagnostics.all()}")
+                        assertEquals("required", resolved.valueArguments.entries.single { it.value.arguments.isNotEmpty() }.key.name.asString())
+                    }
+                }
+            }
+            assertEquals("Callable(\${1:first}, required = \${2:required}, last = \${3:last})\$0",
+                complete("fun Callable(first: Int, optional: Int = 0, required: String, last: Boolean) {}\nCall<caret>", true)
+                    .items.single { it.label == "Callable" }.textEdit.left.newText)
         }
     }
 
