@@ -216,6 +216,16 @@ class GradleSemanticCompletionIntegrationTest {
             assertFalse("block" in trailing)
             val varargs = complete("fun varied(vararg values: Int, text: String) {}\nvaried(1, 2, te<caret>)")
             assertTrue(varargs.items.any { it.textEdit.left.newText == "text = " }, varargs.toString())
+            for (arguments in listOf("values = intArrayOf(1), te<caret>)", "values = *intArrayOf(1), te<caret>)",
+                "*intArrayOf(1), te<caret>)", "1, 2, te<caret>)", "values = intArrayOf(1), te<caret>\nval broken =")) {
+                val result = complete("fun varied(vararg values: Int, text: String) {}\nvaried($arguments")
+                assertTrue(result.items.any { it.textEdit.left.newText == "text = " }, "$arguments: $result")
+                assertTrue(result.items.none { it.textEdit.left.newText == "values = " }, "$arguments: $result")
+            }
+            for (arguments in listOf("values = arrayOf(\"wrong\")", "*arrayOf(\"wrong\")", "\"wrong\"")) {
+                val result = complete("fun varied(vararg values: Int, text: String) {}\nvaried($arguments, te<caret>)")
+                assertTrue(result.items.none { it.textEdit.left.newText == "text = " }, "$arguments: $result")
+            }
             val function = "fun callable(count: Int, text: String = \"default\") {}\n/* 😀 */ cal<caret>lable"
             val plain = complete(function).items.single { it.label == "callable" }
             assertEquals("callable()", plain.textEdit.left.newText)

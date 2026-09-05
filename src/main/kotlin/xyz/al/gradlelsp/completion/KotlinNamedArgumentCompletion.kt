@@ -58,7 +58,8 @@ internal object KotlinNamedArgumentCompletion {
                 } else {
                     val actual = value.getArgumentExpression()?.let(binding::getType)
                     if (actual != null && !actual.isError) {
-                        val expected = if (value.getSpreadElement() == null) parameter.varargElementType ?: parameter.type else parameter.type
+                        val expected = if (name == null && value.getSpreadElement() == null)
+                            parameter.varargElementType ?: parameter.type else parameter.type
                         constraints.addSubtypeConstraint(actual, fresh.substitute(expected, Variance.INVARIANT),
                             ConstraintPositionKind.VALUE_PARAMETER_POSITION.position(parameter.index))
                     }
