@@ -46,7 +46,6 @@ import org.jetbrains.kotlin.resolve.calls.smartcasts.DataFlowValueFactoryImpl
 import org.jetbrains.kotlin.resolve.scopes.DescriptorKindFilter
 import org.jetbrains.kotlin.resolve.scopes.ImportingScope
 import org.jetbrains.kotlin.resolve.scopes.LexicalScope
-import org.jetbrains.kotlin.resolve.scopes.getDescriptorsFiltered
 import org.jetbrains.kotlin.resolve.scopes.receivers.ExpressionReceiver
 import org.jetbrains.kotlin.resolve.scopes.receivers.ReceiverValue
 import org.jetbrains.kotlin.resolve.scopes.utils.getImplicitReceiversHierarchy
@@ -62,6 +61,7 @@ import org.jetbrains.kotlin.types.Variance
 import org.jetbrains.kotlin.types.checker.KotlinTypeChecker
 import org.jetbrains.kotlin.types.checker.KotlinTypeRefiner
 import org.jetbrains.kotlin.types.isError
+import xyz.al.gradlelsp.analysis.completionDescriptors
 import xyz.al.gradlelsp.analysis.AnalysisDocument
 import xyz.al.gradlelsp.analysis.KotlinAstParser
 import xyz.al.gradlelsp.analysis.ParsedKotlinFile
@@ -148,12 +148,12 @@ internal object KotlinSemanticCompletion {
                 else -> emptyList()
             }
             staticScopes.forEach { memberScope ->
-                memberScope.getDescriptorsFiltered(kindFilter, nameFilter).forEach { add(it, 0) }
+                memberScope.completionDescriptors(kindFilter, nameFilter).forEach { add(it, 0) }
             }
         }
         receiverVariants.forEach { (receiver, type, rank) ->
             if (!TypeUtils.isNullableType(type)) {
-                type.memberScope.getDescriptorsFiltered(kindFilter, nameFilter)
+                type.memberScope.completionDescriptors(kindFilter, nameFilter)
                     .filterNot { it is CallableDescriptor && it.extensionReceiverParameter != null }
                     .forEach { add(it, rank, receiver) }
                 if (!position.typePosition) {
@@ -174,7 +174,7 @@ internal object KotlinSemanticCompletion {
             val declarations = if (level is ImportingScope) level.getContributedDescriptors(kindFilter, nameFilter, true)
                 else level.getContributedDescriptors(kindFilter, nameFilter)
             val memberExtensions = if (level is LexicalScope && level.implicitReceiver?.value in implicit) level.implicitReceiver?.type?.memberScope
-                ?.getDescriptorsFiltered(kindFilter, nameFilter).orEmpty() else emptyList()
+                ?.completionDescriptors(kindFilter, nameFilter).orEmpty() else emptyList()
             (declarations + memberExtensions).asSequence()
                 .filter { nameFilter(it.name) && kindFilter.accepts(it) }
                 .forEach { descriptor ->

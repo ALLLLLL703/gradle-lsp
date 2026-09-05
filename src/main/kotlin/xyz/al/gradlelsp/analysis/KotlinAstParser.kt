@@ -40,7 +40,6 @@ import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtPsiFactory
 import org.jetbrains.kotlin.resolve.BindingContext
 import org.jetbrains.kotlin.resolve.scopes.DescriptorKindFilter
-import org.jetbrains.kotlin.resolve.scopes.getDescriptorsFiltered
 import org.jetbrains.kotlin.resolve.lazy.descriptors.LazyPackageDescriptor
 import org.jetbrains.kotlin.samWithReceiver.SamWithReceiverComponentRegistrar
 import org.jetbrains.kotlin.samWithReceiver.SamWithReceiverConfigurationKeys
@@ -222,7 +221,7 @@ internal class KotlinAstParser(
             }
         }
         return scopes.flatMap { scope ->
-            scope.getDescriptorsFiltered(DescriptorKindFilter.ALL) { name ->
+            scope.completionDescriptors(DescriptorKindFilter.ALL) { name ->
                 name.asString().startsWith(prefix, ignoreCase = true)
             }
         }.filter { descriptor ->

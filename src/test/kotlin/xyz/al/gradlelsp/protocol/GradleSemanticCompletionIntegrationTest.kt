@@ -2,6 +2,15 @@ package xyz.al.gradlelsp.protocol
 
 import org.eclipse.lsp4j.CompletionParams
 import org.eclipse.lsp4j.TextDocumentIdentifier
+import org.jetbrains.kotlin.descriptors.ClassifierDescriptor
+import org.jetbrains.kotlin.descriptors.DeclarationDescriptor
+import org.jetbrains.kotlin.descriptors.PropertyDescriptor
+import org.jetbrains.kotlin.descriptors.SimpleFunctionDescriptor
+import org.jetbrains.kotlin.incremental.components.LookupLocation
+import org.jetbrains.kotlin.name.Name
+import org.jetbrains.kotlin.resolve.scopes.DescriptorKindFilter
+import org.jetbrains.kotlin.resolve.scopes.MemberScopeImpl
+import org.jetbrains.kotlin.utils.Printer
 import org.junit.jupiter.api.io.TempDir
 import xyz.al.gradlelsp.analysis.*
 import xyz.al.gradlelsp.completion.SourceCompletions
@@ -15,6 +24,42 @@ import kotlin.test.*
 
 class GradleSemanticCompletionIntegrationTest {
     @TempDir lateinit var temporaryDirectory: Path
+
+    @Test
+    fun `member completion resolves matching compiler names without bulk descriptor enumeration`() {
+        val lookups = mutableListOf<String>()
+        val match = Name.identifier("matching")
+        val other = Name.identifier("unrelated")
+        val scope = object : MemberScopeImpl() {
+            override fun getFunctionNames() = setOf(match, other)
+            override fun getVariableNames() = setOf(match, other)
+            override fun getClassifierNames() = setOf(match, other)
+            override fun getContributedFunctions(name: Name,
+                location: LookupLocation): Collection<SimpleFunctionDescriptor> {
+                lookups += "function:$name"
+                return emptyList()
+            }
+            override fun getContributedVariables(name: Name,
+                location: LookupLocation): Collection<PropertyDescriptor> {
+                lookups += "property:$name"
+                return emptyList()
+            }
+            override fun getContributedClassifier(name: Name,
+                location: LookupLocation): ClassifierDescriptor? {
+                lookups += "classifier:$name"
+                return null
+            }
+            override fun getContributedDescriptors(kindFilter: DescriptorKindFilter,
+                nameFilter: (Name) -> Boolean): Collection<DeclarationDescriptor> =
+                error("Bulk enumeration would resolve unrelated declarations")
+            override fun printScopeStructure(p: Printer) = Unit
+        }
+        scope.completionDescriptors(DescriptorKindFilter.ALL) { it == match }
+        assertEquals(listOf("function:matching", "property:matching", "classifier:matching"), lookups)
+        lookups.clear()
+        scope.completionDescriptors(DescriptorKindFilter.CLASSIFIERS) { it == match }
+        assertEquals(listOf("classifier:matching"), lookups)
+    }
 
     @Test
     fun `local semantic scopes types overloads receivers and recovery work without a Gradle model`() {

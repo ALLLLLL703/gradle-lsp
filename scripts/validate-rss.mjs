@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -273,6 +273,13 @@ try {
   const threads = Number(/^Threads:\s+(\d+)$/m.exec(processStatus)?.[1]);
   if (!Number.isFinite(peakRssKiB)) throw new Error("VmHWM is unavailable; this check requires Linux /proc");
 
+  // Optional observation only: these commands do not request GC or alter JVM limits.
+  const memoryDetails = process.env.GRADLE_LSP_MEMORY_DETAILS === "1" ? {
+    heap: execFileSync("jcmd", [String(server.pid), "GC.heap_info"], { encoding: "utf8", timeout: 10_000 }),
+    metaspace: execFileSync("jcmd", [String(server.pid), "VM.metaspace", "basic=true", "scale=KB"], { encoding: "utf8", timeout: 10_000 }),
+    codeCache: execFileSync("jcmd", [String(server.pid), "Compiler.codecache"], { encoding: "utf8", timeout: 10_000 }),
+    process: await readFile(`/proc/${server.pid}/smaps_rollup`, "utf8"),
+  } : undefined;
   console.log(JSON.stringify({
     currentRssKiB,
     peakRssKiB,
@@ -283,6 +290,7 @@ try {
     importCompletionDurationsMs,
     importClassCompletionDurationsMs,
     semanticCompletionDurationsMs,
+    memoryDetails,
   }));
   if (peakRssKiB >= maximumRssKiB) {
     throw new Error(`Peak RSS ${peakRssKiB} KiB exceeded ${maximumRssKiB} KiB`);

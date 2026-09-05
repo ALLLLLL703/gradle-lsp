@@ -75,7 +75,7 @@ or guarantee of completion in every compiler-error-recovery shape.
 - `node scripts/validate-rss.mjs` — packaged stdio diagnostics/navigation/hover/imports
   plus seven successive semantic edits: Gradle dependency/task/repository APIs,
   Java property, UTF-16 local replacement, smart cast and generic extension detail.
-  Latest peak RSS: **966,404 KiB**, below 1,048,576 KiB; semantic requests 269–880 ms.
+  Stage 1 checkpoint peak RSS: **966,404 KiB**, below 1,048,576 KiB; semantic requests 269–880 ms.
   Earlier runs were 978,536–1,035,564 KiB. Headroom is narrow; this is a measured
   representative scenario, not an OS-enforced memory guarantee. JVM limits were
   not increased. Packaging writes only `build/install`, not a user/system install.
@@ -84,3 +84,31 @@ Compiler API evidence: Kotlin 2.4.10 source JARs, particularly `ScopeUtils.kt`,
 `CliTrace.kt`, `ConstraintSystemBuilderImpl.kt`, `ConstraintSystemImpl.kt`,
 `DataFlowValueFactoryImpl.kt`, `DslMarkerUtils.kt`, `SyntheticScopes.kt`,
 `JavaSyntheticPropertiesScope.kt` and `AllUnderImportScope.kt`.
+
+## Scoped memory follow-up
+
+Member/static/member-extension and import scopes now use compiler function,
+variable and classifier **name sets before descriptor lookup**. This avoids the
+`getDescriptorsFiltered` implementation's resolve-then-filter path in scopes that
+ignore its predicate. Unknown classifier name sets retain a classifier-only
+fallback; compiler name-set implementations themselves are not guaranteed lazy.
+Lexical/importing scopes retain their alias-aware enumeration. A regression rejects
+bulk enumeration and unrelated-name resolution; the full 36-test suite passes.
+
+`GRADLE_LSP_MEMORY_DETAILS=1 node scripts/validate-rss.mjs` optionally records
+`jcmd GC.heap_info`, `VM.metaspace`, `Compiler.codecache` and Linux `smaps_rollup`
+after the ordinary peak sample, without forced GC or JVM-limit changes. The entire
+existing workload is unchanged. Recovery baseline peak was 980,412 KiB; two runs
+after name-first lookup peaked at 965,372 and 990,000 KiB. Import-class request
+latencies fell from 7–273 ms to 4–10 ms in these samples, but RSS improvement is
+not established beyond run-to-run variation.
+
+Post-workload heap used/committed was 341,421/465,680 KiB and 372,414/487,344 KiB;
+metaspace committed was 109,888/109,248 KiB and code cache used 40,049/43,137 KiB.
+After observational attach, process RSS was 978,096/1,000,740 KiB (anonymous RSS
+933,420/956,080 KiB). These non-GC snapshots show substantial committed heap and
+native/anonymous residency; they do not establish a retained-object leak or fully
+attribute the remaining native footprint. The 57–81 MiB pre-attach margin is still
+variable: **robust final memory acceptance remains open**, not satisfied by these
+two below-limit samples. Stage 2 must retain the extended workload and validate
+again, rather than treating this focused optimization as a memory guarantee.
